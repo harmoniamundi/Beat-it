@@ -45,7 +45,8 @@
     --mh: 1.5rem;
     --gap-step: 0.2rem;
     --gap-grp: 0.4rem;
-    --head: 18.5rem;
+    --head: 21rem;
+    --mhead: 5.9rem;
     --f-sys: -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Icons", "Helvetica Neue", sans-serif;
     --f-mono: ui-monospace, Menlo, Consolas, monospace;
 }
@@ -323,16 +324,121 @@ option, optgroup { background: var(--c-card); color: #fff; }
 @media (min-width: 1024px) {
     .row { grid-template-columns: var(--head) minmax(0, 1fr); gap: 0.9rem; align-items: center; }
     .th-space { display: block; }
-    .mrow { grid-template-columns: var(--head) minmax(0, 1fr); gap: 0.9rem; }
-    .mlabel { padding-inline: 0.75rem 1rem; }
+    /* Mélodie : la colonne des noms de notes n'a pas besoin de la largeur des en-têtes de batterie (nom, M, S, volume) ;
+       degré et note restent côte à côte, sans grand vide entre eux. */
+    .mrow { grid-template-columns: var(--mhead) minmax(0, 1fr); gap: 0.9rem; }
+    .mlabel { justify-content: flex-start; gap: 0.5rem; padding-inline: 0.25rem 0.5rem; }
+    .deg { flex: none; width: 2.4rem; text-align: right; font-size: 0.75rem; }
     .nname { font-size: 1.15rem; }
-    .deg { font-size: 0.75rem; }
     .bar { padding: 0.875rem 1.5rem; }
-    .mel-controls { grid-template-columns: repeat(5, minmax(0, 1fr)); padding: 1rem 1.5rem 0; }
+    .mel-controls { grid-template-columns: repeat(4, minmax(0, 1fr)); padding: 1rem 1.5rem 0; }
     .grid-card { margin: 1rem 1.5rem 1.5rem; padding: 0.75rem 1rem; }
     .foot { padding: 1rem 1.5rem 1.5rem; }
 }
 @media (min-width: 640px) and (max-width: 1023px) {
-    .mel-controls { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+    .mel-controls { grid-template-columns: repeat(4, minmax(0, 1fr)); }
 }
 @media print { #offline-chip, #audioStatus { display: none !important; } }
+
+/* ===== Réglages de pas : probabilité, condition, répétitions, verrous, boucle de piste ===== */
+.btn-toggle[aria-pressed="true"] { background: var(--blue-600); border-color: var(--blue-500); color: #fff; }
+.edit-hint { display: none; margin: 0.6rem 1rem 0; font-size: 0.75rem; color: var(--blue-300); }
+.main.editing .edit-hint { display: block; }
+@media (min-width: 1024px) { .edit-hint { margin-inline: 1.5rem; } }
+.main.editing .step { cursor: crosshair; }
+.foot-2 { padding-top: 0; }
+
+/* Petit bouton de boucle de chaque piste (longueur + sens) */
+.lane {
+    flex: none; min-width: 2.6rem; padding: 0.2rem 0.35rem; border-radius: 0.375rem; border: 1px solid transparent;
+    background: transparent; color: var(--t-faint); font: 600 0.7rem/1.2 var(--f-mono); white-space: nowrap; text-align: center;
+}
+.lane:hover, .lane.open { background: var(--c-btn); color: #fff; }
+.lane.custom { color: var(--purple-300); border-color: rgba(168, 85, 247, 0.45); background: rgba(168, 85, 247, 0.12); }
+.lane.open { border-color: var(--blue-400); }
+.lane-btn.custom { color: var(--purple-300); border-color: rgba(168, 85, 247, 0.55); }
+.lane-btn.open { border-color: var(--blue-400); }
+
+/* Pas : probabilité (transparence), marque des réglages, pas hors boucle, pas choisi */
+.step[aria-pressed="true"] { opacity: var(--pa, 1); }
+.step[data-mod]::after {
+    content: ""; position: absolute; top: 0; right: 0; width: 0; height: 0; pointer-events: none;
+    border-top: 8px solid rgba(255, 255, 255, 0.9); border-left: 8px solid transparent; border-top-right-radius: 5px;
+}
+.mstep[data-mod]::after { border-top-width: 6px; border-left-width: 6px; border-top-right-radius: 4px; }
+.step[aria-pressed="false"][data-mod]::after { border-top-color: rgba(255, 255, 255, 0.35); }
+.step.beyond { opacity: 0.22 !important; background: transparent; box-shadow: inset 0 0 0 1px #3a3a3c; }
+.step.beyond[aria-pressed="true"] { opacity: 0.4 !important; background: var(--on); }
+.step.sel { outline: 2px solid var(--blue-400); outline-offset: -2px; z-index: 2; }
+
+/* Panneau de réglage : feuille en bas sur téléphone et tablette, volet à gauche (par-dessus la colonne de réglages) sur grand écran */
+.insp {
+    position: fixed; z-index: 70; left: 0; right: 0; bottom: 0; max-height: 58vh; overflow-y: auto;
+    background: var(--c-card); border-top: 1px solid var(--c-line-card); border-radius: 0.9rem 0.9rem 0 0;
+    box-shadow: 0 -8px 28px rgba(0, 0, 0, 0.55); padding: 0.75rem 1rem calc(1rem + env(safe-area-inset-bottom));
+}
+body.insp-open { padding-bottom: 56vh; }
+@media (min-width: 1024px) {
+    body.insp-open { padding-bottom: 0; }
+    .insp {
+        right: auto; top: 57px; bottom: 0; width: 300px; max-height: none; border-radius: 0;
+        border: 0; border-right: 1px solid var(--c-line); box-shadow: 6px 0 24px rgba(0, 0, 0, 0.35);
+    }
+}
+.insp-head { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; position: sticky; top: -0.75rem; background: var(--c-card); padding: 0.25rem 0 0.5rem; margin-top: -0.25rem; }
+.insp-head strong { font-size: 0.9rem; color: #fff; }
+.insp-x { width: 2rem; height: 2rem; border-radius: 0.375rem; background: var(--c-btn); color: var(--t-soft); font-size: 0.85rem; }
+.insp-x:hover { background: var(--c-btn-hover); }
+.insp-body { display: flex; flex-direction: column; gap: 0.7rem; }
+.insp-body[hidden] { display: none; }
+.insp-lane { margin-top: 0.9rem; padding-top: 0.8rem; border-top: 1px solid var(--c-line-card); }
+.insp-body .btn-sm { align-self: flex-start; }
+.fx { display: flex; flex-direction: column; gap: 0.3rem; }
+.fx .row-between { padding-inline: 0; }
+.fx-title { font-size: 0.7rem; font-weight: 700; color: var(--blue-400); text-transform: uppercase; letter-spacing: 0.05em; margin-top: 0.2rem; }
+.cond-line { display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap; }
+.cond-line .sel { width: auto; min-width: 11rem; flex: 1 1 11rem; }
+.chk { display: inline-flex; align-items: center; gap: 0.4rem; font-size: 0.75rem; font-weight: 600; color: var(--t-muted); }
+.chk input { width: 1.05rem; height: 1.05rem; accent-color: var(--blue-500); }
+.chk input:disabled + * , .chk:has(input:disabled) { opacity: 0.45; }
+.insp .hint { padding-inline: 0; }
+.insp .seg button { padding: 0.45rem 0; }
+.insp .stepper input { width: 3rem; }
+
+/* ===== Instruments de la mélodie : palette (une couleur par instrument) ===== */
+.ins-bar { padding: 0.75rem 1rem 0; display: flex; flex-direction: column; gap: 0.5rem; }
+.ins-head { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 0.5rem 0.75rem; }
+.ins-oct { display: flex; align-items: center; gap: 0.5rem; }
+.ins-who { font-size: 0.75rem; font-weight: 600; color: var(--t-muted); }
+.ins-who b { color: var(--ic, #fff); font-weight: 700; }
+.stepper output { min-width: 1.9rem; text-align: center; color: #fff; font: 700 0.875rem/1 var(--f-mono); font-variant-numeric: tabular-nums; }
+.ins-palette { display: flex; flex-wrap: wrap; gap: 0.4rem; }
+.ins {
+    display: inline-flex; align-items: center; gap: 0.4rem; padding: 0.35rem 0.65rem 0.35rem 0.5rem; border-radius: 9999px;
+    border: 1px solid var(--c-btn-line); background: var(--c-btn); color: var(--t-soft); font-size: 0.75rem; font-weight: 600; line-height: 1.2;
+    transition: background 0.15s, border-color 0.15s;
+}
+.ins:hover { background: var(--c-btn-hover); color: #fff; }
+.ins .dot { flex: none; width: 0.7rem; height: 0.7rem; border-radius: 50%; background: var(--ic); box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.25); }
+.ins.on { color: #fff; border-color: var(--ic); background: color-mix(in srgb, var(--ic) 22%, var(--c-btn)); box-shadow: 0 0 0 1px var(--ic); }
+.ins-bar .hint { padding-inline: 0.125rem; }
+@media (min-width: 1024px) { .ins-bar { padding: 1rem 1.5rem 0; } }
+
+/* Bouton « Générer » (proposition dans le style) */
+.btn-gen { background: rgba(168, 85, 247, 0.18); border-color: rgba(168, 85, 247, 0.55); color: var(--purple-300); }
+.btn-gen:hover { background: rgba(168, 85, 247, 0.3); color: #fff; }
+
+/* Choix du style, en tête de la colonne de gauche */
+.sel-purple.sel-wide { width: 100%; min-width: 0; }
+
+/* Couches : un même degré peut porter plusieurs instruments au même pas ; les lignes en plus se montrent sous la principale */
+.mrow.layer .mlabel { opacity: 0.4; }
+.mrow.layer .nname { font-size: 0.95rem; }
+
+/* Mélangeur des instruments de la mélodie (colonne de gauche) */
+.mix-title { margin-top: 0.5rem; font-size: 0.7rem; }
+.ins-mix { display: flex; flex-direction: column; gap: 0.1rem; }
+.vrow.ins-row { grid-template-columns: 6.6rem minmax(0, 1fr) 2rem; }
+.ins-name { display: flex; align-items: center; gap: 0.4rem; min-width: 0; }
+.ins-name span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ins-name .dot { flex: none; width: 0.6rem; height: 0.6rem; border-radius: 50%; }

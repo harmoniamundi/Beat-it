@@ -27,7 +27,7 @@ assert.strictEqual(names('A', 'harmonicMinor'), 'A B C D E F G♯');
 assert.strictEqual(names('A', 'melodicMinor'), 'A B C D E F♯ G♯');
 assert.strictEqual(names('C', 'pentMaj'), 'C D E G A');
 assert.strictEqual(names('C', 'pentMin'), 'C E♭ F G B♭');
-assert.strictEqual(names('C', 'blues'), 'C E♭ F G♭ G B♭');
+assert.strictEqual(names('C', 'blues'), 'C E♭ F F♯ G B♭');
 assert.strictEqual(names('C', 'wholeTone'), 'C D E F♯ G♯ B♭');
 assert.strictEqual(names('Bb', 'pentMin'), 'B♭ D♭ E♭ F A♭');
 assert.strictEqual(names('D#', 'minor'), 'D♯ E♯ F♯ G♯ A♯ B C♯');
@@ -68,8 +68,27 @@ assert.strictEqual(r[0].midi, 71);
 Theory.SCALES.forEach(sc => {
     const rows = Theory.rows('C', sc.id, 4, 2);
     for (let i = 1; i < rows.length; i++) assert.ok(rows[i].midi > rows[i - 1].midi, sc.id + ' doit monter');
-    assert.ok(rows.length <= 15, sc.id + ' tient dans 15 lignes');
+    assert.ok(rows.length <= 25, sc.id + ' tient dans 25 lignes');
 });
+
+// Gamme chromatique et gammes de Mode Machine
+assert.strictEqual(names('C', 'chromatic'), 'C D♭ D E♭ E F F♯ G A♭ A B♭ B');
+assert.strictEqual(names('A', 'chromatic'), 'A B♭ B C C♯ D D♯ E F F♯ G G♯');
+assert.strictEqual(Theory.rows('C', 'chromatic', 4, 1).length, 13);
+assert.strictEqual(Theory.rows('C', 'chromatic', 4, 2).length, 25);
+assert.deepStrictEqual(Theory.rows('C', 'chromatic', 4, 1).map(x => x.midi), [60, 61, 62, 63, 64, 65, 66, 67, 68, 69, 70, 71, 72]);
+assert.strictEqual(Theory.SCALES.length, 75);
+assert.strictEqual(new Set(Theory.SCALES.map(s => s.id)).size, 75, 'identifiants uniques');
+assert.strictEqual(names('C', 'phryg_dom'), 'C D♭ E F G A♭ B♭');
+assert.strictEqual(names('C', 'byzantine'), 'C D♭ E F G A♭ B');
+assert.strictEqual(names('C', 'hungarian_minor'), 'C D E♭ F♯ G A♭ B');
+assert.strictEqual(names('C', 'altered'), 'C D♭ E♭ F♭ G♭ A♭ B♭');
+assert.strictEqual(names('C', 'hirajoshi'), 'C D E♭ G A♭');
+assert.strictEqual(names('C', 'gamelan_slendro'), 'C D F G B♭');
+assert.strictEqual(names('C', 'diminished_hw'), 'C D♭ E♭ E F♯ G A B♭');
+// Jamais plus de deux dièses ou bémols à une note
+['C', 'C#', 'Db', 'D', 'Eb', 'F#', 'G#', 'Ab', 'Bb', 'B'].forEach(root => Theory.SCALES.forEach(sc =>
+    sc.tokens.forEach(tok => assert.ok(!/(♯♯♯|♭♭♭)/.test(Theory.noteName(root, tok)), root + ' ' + sc.id + ' ' + tok))));
 
 // Noms de notes pour soundfont-player
 assert.strictEqual(Theory.midiName(60), 'C4');

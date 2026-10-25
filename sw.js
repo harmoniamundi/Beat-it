@@ -30,6 +30,7 @@ const SHELL_FILES = [
     'app/vendor/soundfont-player.min.js',
     'app/audio/local-soundfonts.js',
     'app/audio/drum-synths.js',
+    'app/audio/synth-voices.js',
     'app/offline.js',
     'app/theory.js',
     'app/audio-engine.js',

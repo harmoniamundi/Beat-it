@@ -1,23 +1,37 @@
 // audio-engine.js — son du Séquenceur pas à pas.
 //  - Percussions : les synthés de la batterie de Chord Scales (audio/drum-synths.js), jouées avec leur « runtime » audio.
-//  - Mélodie : échantillons d'instruments (piano, trompette, basse) via soundfont-player, lus depuis le dossier
-//    app/sounds/ (voir audio/local-soundfonts.js) ; un petit synthé de secours joue tant que l'instrument charge
-//    ou si son fichier est introuvable.
-// Chargé après soundfont-player, local-soundfonts.js et drum-synths.js. Aucun accès au DOM.
+//  - Mélodie : chaque note peut avoir son instrument. Piano, trompette et basse sont des échantillons (soundfont-player,
+//    lus depuis app/sounds/, voir audio/local-soundfonts.js) ; les autres sont synthétisés (audio/synth-voices.js).
+//    Le synthé joue aussi de secours tant qu'un échantillon charge ou si son fichier est introuvable.
+// Chargé après soundfont-player, local-soundfonts.js, drum-synths.js et synth-voices.js. Aucun accès au DOM.
 
 const SeqAudio = (() => {
-    // Timbres de la mélodie. `oct` : octave de départ proposée quand on choisit ce timbre.
+    // Instruments de la mélodie, dans l'ordre où on les propose.
+    //   label : nom affiché · color : couleur des cases · shift : décalage d'octaves proposé au départ
+    //   sf / bank : échantillon (soundfont-player) ; sans `sf`, l'instrument est synthétisé (voix du même nom dans synth-voices.js)
     const TIMBRES = {
-        piano:   { label: 'Piano',     sf: 'acoustic_grand_piano', bank: 'FluidR3_GM', oct: 4 },
-        trumpet: { label: 'Trompette', sf: 'trumpet',              bank: 'MusyngKite', oct: 4 },
-        bass:    { label: 'Basse',     sf: 'electric_bass_finger', bank: 'FluidR3_GM', oct: 2 },
-        synth:   { label: 'Synthé',    sf: null,                   bank: null,         oct: 4 }
+        piano:     { label: 'Piano',          color: '#e2e8f0', shift: 0,  sf: 'acoustic_grand_piano', bank: 'FluidR3_GM' },
+        organ:     { label: 'Orgue',          color: '#f97316', shift: 0 },
+        guitar:    { label: 'Guitare',        color: '#b8794b', shift: 0 },
+        strings:   { label: 'Cordes',         color: '#f43f5e', shift: 0 },
+        bass:      { label: 'Basse',          color: '#3b82f6', shift: -2, sf: 'electric_bass_finger', bank: 'FluidR3_GM' },
+        synthbass: { label: 'Basse synthé',   color: '#f472b6', shift: -2 },
+        trumpet:   { label: 'Trompette',      color: '#fbbf24', shift: 0,  sf: 'trumpet', bank: 'MusyngKite' },
+        flute:     { label: 'Flûte',          color: '#2dd4bf', shift: 0 },
+        clarinet:  { label: 'Clarinette',     color: '#a3e635', shift: 0 },
+        marimba:   { label: 'Marimba',        color: '#22c55e', shift: 0 },
+        vibes:     { label: 'Vibraphone',     color: '#818cf8', shift: 0 },
+        bells:     { label: 'Carillon',       color: '#38bdf8', shift: 0 },
+        synth:     { label: 'Synthé',         color: '#a855f7', shift: 0 },
+        chip:      { label: 'Chiptune',       color: '#e879f9', shift: 0 },
+        pad:       { label: 'Nappe',          color: '#94a3b8', shift: 0 }
     };
 
     let ctx = null, master, comp, drumBus, melBus, reverbIn, noiseBuf, satCurve, rt;
     const trackGain = {}, nodes = [], players = {};
     const vols = { track: {}, drum: 0.8, mel: 0.7 };
-    let lastOpen = null, timbre = 'piano', statusFn = () => {};
+    let lastOpen = null, timbre = 'piano', voices = {}, statusFn = () => {};
+    const wanted = new Set(['piano']);       // instruments à échantillons dont la page a besoin (chargés dès que le son démarre)
 
     function buildReverb() {
         // Petite réverbération (bruit à décroissance exponentielle) : sert aux cymbales et, très peu, à la mélodie.
@@ -55,7 +69,9 @@ const SeqAudio = (() => {
             buildReverb();
             const cores = (typeof navigator !== 'undefined' && navigator.hardwareConcurrency) || 4;
             rt = { ctx, tier: cores <= 2 ? 1 : 0, nodes, noise: () => noiseBuf, curve: () => satCurve, reverb: () => reverbIn };
-            loadTimbre(timbre);
+            voices = createSynthVoices({ ctx, nodes, noise: () => noiseBuf });
+            wanted.add(timbre);
+            wanted.forEach(loadTimbre);
         }
         if (ctx.state === 'suspended') ctx.resume();
         return true;
@@ -63,6 +79,32 @@ const SeqAudio = (() => {
 
     const now = () => (ctx ? ctx.currentTime : 0);
     const get = () => ctx;
+
+    /* ---------- Verrous de paramètres (filtre, panoramique, réverbération d'un seul pas) ---------- */
+    // fx : { flt (0–100, 100 = ouvert), pan (−100…100), rev (0–100) }. Renvoie le nœud où brancher le son du pas :
+    // lui-même est relié à `dest` à travers un filtre passe-bas, un panoramique et un envoi de réverbération.
+    function fxInput(dest, fx) {
+        const inp = ctx.createGain();
+        let last = inp;
+        if (fx.flt < 100) {
+            const lp = ctx.createBiquadFilter();
+            lp.type = 'lowpass'; lp.Q.value = 0.8;
+            lp.frequency.value = 200 * Math.pow(100, fx.flt / 100);     // 200 Hz → 20 kHz
+            last.connect(lp); last = lp;
+        }
+        if (fx.pan && ctx.createStereoPanner) {
+            const pn = ctx.createStereoPanner();
+            pn.pan.value = Math.max(-1, Math.min(1, fx.pan / 100));
+            last.connect(pn); last = pn;
+        }
+        last.connect(dest);
+        if (fx.rev > 0) {
+            const send = ctx.createGain();
+            send.gain.value = (fx.rev / 100) * 1.6;
+            last.connect(send); send.connect(reverbIn);
+        }
+        return inp;
+    }
 
     /* ---------- Percussions ---------- */
     function trackNode(id) {
@@ -85,82 +127,82 @@ const SeqAudio = (() => {
     }
 
     function prune() {
-        if (nodes.length > 500) nodes.splice(0, nodes.length - 250);
+        if (nodes.length > 1500) nodes.splice(0, nodes.length - 700);
     }
 
     // trackId : piste de la grille ; drum : nom du coup dans drum-synths.js (kick, snare, rim, hat, ohat, ride, bell, tom2, clave…)
-    function playDrum(trackId, drum, when) {
+    // vel : force du coup (0,9 par défaut) ; fx : verrous du pas (voir fxInput), ou rien
+    function playDrum(trackId, drum, when, vel, fx) {
         if (!ctx) return;
-        const dest = trackNode(trackId);
+        const v = vel == null ? 0.9 : vel;
+        let dest = trackNode(trackId);
+        if (fx) dest = fxInput(dest, fx);
         if (drum === 'hat' || drum === 'ohat') chokeOpen(when);
         if (drum === 'ohat') {
             const g = ctx.createGain();
             g.connect(dest);
-            synthDrumLive(rt, { drum }, when, g, 0.9);
+            synthDrumLive(rt, { drum }, when, g, v);
             lastOpen = g;
         } else {
-            synthDrumLive(rt, { drum }, when, dest, 0.9);
+            synthDrumLive(rt, { drum }, when, dest, v);
         }
         prune();
     }
 
     /* ---------- Mélodie ---------- */
+    // Pastille d'état : ce qui charge encore, ou ce qui manque (le synthé joue alors à la place).
+    function refreshStatus() {
+        const names = (state) => Object.keys(players).filter((k) => wanted.has(k) && players[k].state === state).map((k) => TIMBRES[k].label);
+        const loading = names('loading'), failed = names('failed');
+        if (loading.length) statusFn('Chargement : ' + loading.join(', ') + '…');
+        else if (failed.length) statusFn('Son introuvable (' + failed.join(', ') + ') : synthé de secours');
+        else statusFn('');
+    }
+
     function loadTimbre(key) {
         const def = TIMBRES[key];
         if (!def || !def.sf || !ctx) return Promise.resolve();
         const p = players[key] || (players[key] = { state: 'idle' });
         if (p.state === 'loading' || p.state === 'ready' || p.state === 'failed') return p.promise || Promise.resolve();
-        if (typeof Soundfont === 'undefined') { p.state = 'failed'; return Promise.resolve(); }
+        if (typeof Soundfont === 'undefined') { p.state = 'failed'; refreshStatus(); return Promise.resolve(); }
         p.state = 'loading';
-        if (key === timbre) statusFn('Chargement : ' + def.label + '…');
+        refreshStatus();
         p.promise = Soundfont.instrument(ctx, def.sf, { soundfont: def.bank, format: 'mp3', destination: melBus })
-            .then((inst) => {
-                p.inst = inst;
-                p.state = 'ready';
-                if (key === timbre) statusFn('');
-            })
-            .catch(() => {
-                p.state = 'failed';
-                if (key === timbre) statusFn('Son de ' + def.label.toLowerCase() + ' introuvable : synthé de secours');
-            });
+            .then((inst) => { p.inst = inst; p.state = 'ready'; refreshStatus(); })
+            .catch(() => { p.state = 'failed'; refreshStatus(); });
         return p.promise;
     }
 
+    // Annonce les instruments utilisés par la mélodie : ceux qui sont à échantillons sont chargés (tout de suite si le
+    // son est déjà démarré, sinon au démarrage).
+    function want(keys) {
+        keys.forEach((k) => { if (TIMBRES[k]) { wanted.add(k); if (ctx) loadTimbre(k); } });
+    }
+
+    // Instrument « par défaut » (celui qu'on entend en écoutant une note, ou quand une note n'en précise pas).
     function setTimbre(key) {
         if (!TIMBRES[key]) return;
         timbre = key;
-        statusFn('');
-        if (ctx) loadTimbre(key);
+        want([key]);
+        refreshStatus();
     }
 
-    // Synthé de secours : deux oscillateurs filtrés, enveloppe simple.
-    function synthNote(midi, when, dur, vel) {
-        const f = 440 * Math.pow(2, (midi - 69) / 12);
-        const o1 = ctx.createOscillator(), o2 = ctx.createOscillator();
-        const lp = ctx.createBiquadFilter(), g = ctx.createGain();
-        const hold = Math.max(dur, 0.04);
-        o1.type = 'triangle'; o2.type = 'sawtooth';
-        o1.frequency.value = f; o2.frequency.value = f; o2.detune.value = 6;
-        lp.type = 'lowpass'; lp.Q.value = 0.7;
-        lp.frequency.setValueAtTime(Math.min(f * 7, 9000), when);
-        lp.frequency.exponentialRampToValueAtTime(Math.max(f * 2, 500), when + hold);
-        g.gain.setValueAtTime(0.0001, when);
-        g.gain.linearRampToValueAtTime(0.2 * vel, when + 0.01);
-        g.gain.setValueAtTime(0.2 * vel, when + hold);
-        g.gain.exponentialRampToValueAtTime(0.0001, when + hold + 0.15);
-        o1.connect(lp); o2.connect(lp); lp.connect(g); g.connect(melBus);
-        o1.start(when); o2.start(when);
-        o1.stop(when + hold + 0.2); o2.stop(when + hold + 0.2);
-        nodes.push(o1, o2);
-    }
-
-    function playNote(midi, when, dur, vel) {
+    // fx : verrous du pas (voir fxInput), ou rien · key : instrument de la note (sinon l'instrument par défaut)
+    function playNote(midi, when, dur, vel, fx, key) {
         if (!ctx) return;
-        const p = players[timbre];
-        if (TIMBRES[timbre].sf && p && p.state === 'ready') {
-            try { p.inst.play(Theory.midiName(midi), when, { duration: dur, gain: vel }); } catch (e) { synthNote(midi, when, dur, vel); }
+        const k = TIMBRES[key] ? key : timbre, def = TIMBRES[k];
+        const out = fx ? fxInput(melBus, fx) : melBus;
+        if (def.sf) {
+            const p = players[k];
+            if (p && p.state === 'ready') {
+                try { p.inst.play(Theory.midiName(midi), when, { duration: dur, gain: vel, destination: out }); prune(); return; }
+                catch (e) { /* on retombe sur le synthé */ }
+            } else if (!p || p.state === 'idle') {
+                want([k]);
+            }
+            voices.synth(midi, when, dur, vel, out);                 // en attendant l'échantillon (ou s'il manque)
         } else {
-            synthNote(midi, when, dur, vel);
+            (voices[k] || voices.synth)(midi, when, dur, vel, out);
         }
         prune();
     }
@@ -189,7 +231,7 @@ const SeqAudio = (() => {
     }
 
     return {
-        TIMBRES, init, now, get, playDrum, playNote, setTimbre, setTrackVolume, setDrumVolume, setMelodyVolume, stopAll,
+        TIMBRES, init, now, get, playDrum, playNote, setTimbre, want, setTrackVolume, setDrumVolume, setMelodyVolume, stopAll,
         onStatus(fn) { statusFn = fn || (() => {}); }
     };
 })();
