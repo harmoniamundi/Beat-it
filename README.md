@@ -34,6 +34,18 @@ l'installation sur iPhone demandent en revanche une publication sur un site (voi
 
 Ensuite l'appli s'ouvre comme une application et joue même sans réseau.
 
+### Mode silencieux et écran allumé
+
+- **Son malgré le mode silencieux** : l'appli déclare à iOS qu'elle « lit un média » (`navigator.audioSession`,
+  iOS 16.4 et plus ; sur un iPhone plus ancien, une piste muette tourne en boucle pour obtenir le même effet).
+  Le volume de l'iPhone (boutons latéraux) reste, lui, actif.
+- **Écran qui ne s'éteint pas** tant que l'appli est affichée (API *Wake Lock*, iOS 16.4 et plus ; sur un iPhone
+  plus ancien, une mini-vidéo muette invisible joue en boucle). Si on quitte l'appli ou verrouille l'iPhone à la main,
+  l'écran se comporte normalement ; au retour, le maintien se réactive tout seul.
+- Ces deux réglages démarrent au **premier toucher** de l'écran (règle d'iOS). Pensez à brancher l'iPhone si la
+  séance est longue : écran allumé = batterie qui baisse plus vite. En mode économie d'énergie, iOS peut refuser de
+  garder l'écran allumé.
+
 ## Gammes et modes
 
 Le menu « Gamme » reprend les 74 gammes et modes de Mode Machine, avec les mêmes noms, les mêmes groupes et la même écriture des notes
@@ -112,6 +124,7 @@ app/
   theory.js             gammes et noms de notes (+ theory.test.js : « node app/theory.test.js »)
   style.css             la mise en forme
   offline.js            enregistrement du mode hors ligne
+  keepalive.js          iPhone : son en mode silencieux, écran toujours allumé
   audio/                synthés de batterie, instruments synthétisés (synth-voices.js), chargement local des sons
   sounds/               piano, trompette, basse électrique (environ 8 Mo)
   vendor/, fonts/, icons/, licenses/

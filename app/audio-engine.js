@@ -56,6 +56,7 @@ const SeqAudio = (() => {
         if (!ctx) {
             const AC = window.AudioContext || window.webkitAudioContext;
             if (!AC) return false;
+            if (typeof Keepalive !== 'undefined') Keepalive.setupAudioSession(); // iPhone : jouer même en mode silencieux
             ctx = new AC();
             comp = ctx.createDynamicsCompressor();
             comp.threshold.value = -12; comp.ratio.value = 4; comp.attack.value = 0.003; comp.release.value = 0.15;
@@ -73,7 +74,8 @@ const SeqAudio = (() => {
             wanted.add(timbre);
             wanted.forEach(loadTimbre);
         }
-        if (ctx.state === 'suspended') ctx.resume();
+        if (ctx.state !== 'running') ctx.resume().catch(() => {}); // 'suspended' ou 'interrupted' (iOS)
+        if (typeof Keepalive !== 'undefined') Keepalive.startSilentAudio();
         return true;
     }
 

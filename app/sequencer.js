@@ -1458,6 +1458,8 @@ mainEl.addEventListener('contextmenu', e => {
 // Activer ou peindre des pas : souris, doigt ou stylet. Au doigt, le pas ne change qu'au relâchement (pour pouvoir
 // faire défiler la page) ; en glissant le long d'une ligne, on peint tous les pas traversés (cases voisines d'une
 // ligne mélodique = une note tenue).
+if (typeof Keepalive !== 'undefined') Keepalive.install(() => SeqAudio.init()); // iPhone : son malgré le mode silencieux, écran allumé
+
 let drag = null;
 mainEl.addEventListener('pointerdown', e => {
     const b = e.target.closest('.step');

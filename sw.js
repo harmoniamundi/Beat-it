@@ -32,6 +32,7 @@ const SHELL_FILES = [
     'app/audio/drum-synths.js',
     'app/audio/synth-voices.js',
     'app/offline.js',
+    'app/keepalive.js',
     'app/theory.js',
     'app/audio-engine.js',
     'app/sequencer.js'
