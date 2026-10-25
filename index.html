@@ -1,0 +1,168 @@
+<!DOCTYPE html>
+<html lang="fr" class="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Séquenceur pas à pas</title>
+    <link rel="manifest" href="manifest.webmanifest">
+    <meta name="theme-color" content="#121212">
+    <meta name="color-scheme" content="dark">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-title" content="Séquenceur">
+    <link rel="icon" type="image/png" sizes="192x192" href="app/icons/icon-192.png">
+    <link rel="apple-touch-icon" href="app/icons/apple-touch-icon.png">
+    <!-- Bibliothèques, police et sons sont dans le dossier app/ : rien n'est chargé depuis Internet,
+         l'appli fonctionne donc hors ligne (voir sw.js et app/offline.js). -->
+    <link rel="stylesheet" href="app/style.css">
+</head>
+<body>
+
+<div id="app-shell">
+
+    <header class="hdr">
+        <span class="hdr-title">Séquenceur pas à pas</span>
+        <div class="hdr-right">
+            <div class="stepper" role="group" aria-label="Tempo">
+                <button type="button" id="bpmDown" aria-label="Ralentir d'un battement par minute">−</button>
+                <input id="bpm" type="number" inputmode="numeric" min="40" max="220" step="1" value="100" aria-label="Tempo en battements par minute">
+                <span class="unit">BPM</span>
+                <button type="button" id="bpmUp" aria-label="Accélérer d'un battement par minute">+</button>
+            </div>
+            <button type="button" id="play" class="btn-play" aria-label="Jouer ou arrêter (barre d'espace)">
+                <svg id="icoPlay" width="14" height="14" viewBox="0 0 14 14" fill="currentColor" aria-hidden="true"><path d="M3 1.5v11l9-5.5z"/></svg>
+                <svg id="icoStop" width="14" height="14" viewBox="0 0 14 14" fill="currentColor" aria-hidden="true" hidden><rect x="2.5" y="2.5" width="9" height="9" rx="1.5"/></svg>
+                <span id="playLabel">Jouer</span>
+            </button>
+        </div>
+    </header>
+
+    <div class="body">
+
+        <aside id="aside" class="aside">
+            <button type="button" id="asideToggle" class="aside-toggle" aria-expanded="false" aria-controls="asideBody">
+                <span>Réglages : tempo, pas, volumes</span>
+                <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 5l4 4 4-4"/></svg>
+            </button>
+
+            <div id="asideBody">
+
+                <div class="card">
+                    <div class="lbl-blue">Tempo</div>
+                    <div class="tempo-line">
+                        <input id="bpmBig" class="bpm-big" type="number" inputmode="numeric" min="40" max="220" step="1" value="100" aria-label="Tempo en battements par minute">
+                        <span class="muted">BPM (la noire)</span>
+                    </div>
+                    <input id="tempo" class="rng" type="range" min="40" max="220" step="1" value="100" aria-label="Curseur de tempo">
+                    <div class="row-between" style="margin-top:0.5rem">
+                        <span class="muted">Tapez en rythme :</span>
+                        <button type="button" id="tap" class="btn-sm">Tap tempo</button>
+                    </div>
+                </div>
+
+                <div class="block">
+                    <div class="row-between">
+                        <span class="lbl">Subdivision</span>
+                        <span id="divBadge" class="badge blue">16 pas</span>
+                    </div>
+                    <div id="seg" class="seg" role="group" aria-label="Nombre de pas par mesure"></div>
+                    <p class="hint">Une mesure à 4 temps, découpée en croches, en triolets ou en doubles-croches.</p>
+                </div>
+
+                <div id="swingBlock" class="block">
+                    <div class="row-between">
+                        <span class="lbl">Swing</span>
+                        <span id="swingBadge" class="badge purple">0 %</span>
+                    </div>
+                    <input id="swing" class="rng" type="range" min="0" max="100" step="1" value="0" aria-label="Swing">
+                    <p id="swingHint" class="hint" hidden>Les triolets ont déjà leur propre balancement : le swing est désactivé.</p>
+                </div>
+
+                <div class="block">
+                    <span class="lbl">Volumes</span>
+                    <div class="vrow">
+                        <span>Batterie</span>
+                        <input id="volDrums" class="rng" type="range" min="0" max="100" step="1" value="80" aria-label="Volume de la batterie">
+                        <output id="volDrumsOut" for="volDrums">80</output>
+                    </div>
+                    <div class="vrow">
+                        <span>Mélodie</span>
+                        <input id="volMel" class="rng emerald" type="range" min="0" max="100" step="1" value="70" aria-label="Volume de la mélodie">
+                        <output id="volMelOut" for="volMel">70</output>
+                    </div>
+                </div>
+
+            </div>
+        </aside>
+
+        <main id="main" class="main">
+
+            <section class="panel" aria-labelledby="drumTitle">
+                <div class="bar">
+                    <div class="bar-left">
+                        <h2 id="drumTitle">Batterie</h2>
+                        <select id="preset" class="sel sel-purple" aria-label="Rythme tout prêt"></select>
+                    </div>
+                    <div class="bar-tools">
+                        <button type="button" id="drumRand" class="btn-sm">Au hasard</button>
+                        <button type="button" id="drumClear" class="btn-sm">Vider</button>
+                    </div>
+                </div>
+                <div class="grid-card">
+                    <div class="row ruler">
+                        <div class="th-space"></div>
+                        <div id="drumRuler" class="ruler-cells" aria-hidden="true"></div>
+                    </div>
+                    <div id="drumRows" class="tracks"></div>
+                </div>
+            </section>
+
+            <section class="panel" aria-labelledby="melTitle">
+                <div class="bar">
+                    <div class="bar-left">
+                        <h2 id="melTitle">Mélodie</h2>
+                        <span id="rootBadge" class="badge blue">C</span>
+                        <span id="scaleBadge" class="badge emerald">Majeure (ionien)</span>
+                    </div>
+                    <div class="bar-tools">
+                        <button type="button" id="melRand" class="btn-sm">Au hasard</button>
+                        <button type="button" id="melClear" class="btn-sm">Vider</button>
+                    </div>
+                </div>
+                <div class="mel-controls">
+                    <label class="fld"><span>Timbre</span><select id="selTimbre" class="sel"></select></label>
+                    <label class="fld"><span>Fondamentale</span><select id="selRoot" class="sel"></select></label>
+                    <label class="fld"><span>Gamme</span><select id="selScale" class="sel"></select></label>
+                    <label class="fld"><span>Registre</span><select id="selOct" class="sel"></select></label>
+                    <label class="fld"><span>Étendue</span><select id="selRange" class="sel"></select></label>
+                </div>
+                <div class="grid-card">
+                    <div class="mrow mruler">
+                        <div></div>
+                        <div id="melRuler" class="ruler-cells" aria-hidden="true"></div>
+                    </div>
+                    <div id="melRows" class="mrows"></div>
+                </div>
+            </section>
+
+            <p class="foot">
+                Cliquez sur une case pour poser ou retirer un pas, ou glissez le long d'une ligne pour en peindre plusieurs.
+                Dans la mélodie, des cases voisines sur une même ligne forment une seule note tenue.
+                Cliquez sur le nom d'une piste ou d'une note pour l'écouter. Barre d'espace : jouer / arrêter.
+            </p>
+
+        </main>
+    </div>
+</div>
+
+<div id="audioStatus" role="status" aria-live="polite" hidden></div>
+
+<script src="app/vendor/soundfont-player.min.js"></script>
+<script src="app/audio/local-soundfonts.js"></script>
+<script src="app/audio/drum-synths.js"></script>
+<script src="app/theory.js"></script>
+<script src="app/audio-engine.js"></script>
+<script src="app/sequencer.js"></script>
+<script src="app/offline.js"></script>
+</body>
+</html>
