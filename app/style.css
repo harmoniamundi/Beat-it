@@ -442,3 +442,13 @@ body.insp-open { padding-bottom: 56vh; }
 .ins-name { display: flex; align-items: center; gap: 0.4rem; min-width: 0; }
 .ins-name span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ins-name .dot { flex: none; width: 0.6rem; height: 0.6rem; border-radius: 50%; }
+
+/* Téléphone : cases carrées (largeur = celle de la colonne, hauteur identique) → la grille prend bien moins de hauteur.
+   Batterie : la case passe de 2,3 rem de haut à un carré ; mélodie : carrés aussi, avec une colonne de noms plus étroite
+   pour qu'ils restent aussi grands que possible. */
+@media (max-width: 639px) {
+    .step, .mstep { height: auto; aspect-ratio: 1 / 1; }
+    .mrow { grid-template-columns: 3.7rem minmax(0, 1fr); gap: 0.3rem; }
+    .mlabel { padding: 0 0.2rem; gap: 0.15rem; }
+    .nname { font-size: 0.95rem; }
+}
