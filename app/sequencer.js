@@ -42,6 +42,17 @@ const RATS = [1, 2, 3, 4, 6, 8];
 //   prob : chance de jouer (%) · cond/inv : condition · rat : répétitions · vol, flt (filtre, 100 = ouvert), pan, rev : verrous · oct : octave (mélodie)
 const EXT_SPEC = { prob: [0, 100, 100], vol: [0, 100, 100], flt: [0, 100, 100], pan: [-100, 100, 0], rev: [0, 100, 0] };
 
+// Patterns : 8 motifs (A à H) qui partagent le tempo, la gamme et les sons. Chacun a sa batterie, sa mélodie, ses réglages de pas et de piste.
+const NPAT = 8, PAT_NAMES = 'ABCDEFGH';
+const PAT_FIELDS = ['pat', 'mel', 'ext', 'len', 'dir', 'off'];
+const SONG_REPS = [1, 2, 4, 8], SONG_MAX = 64;
+// Force d'un coup de batterie (valeur d'une case allumée) : 1 normal, 2 accent, 3 fantôme
+const LV_GAIN = [0, 1, 1.15, 0.42];
+const LV_NAME = ['', 'Normal', 'Accent', 'Fantôme'];
+// Humanisation : écart maximal de placement (en secondes) et de force (part du niveau) quand le curseur est à 100
+const HUM_TIME = 0.018, HUM_VEL = 0.3;
+const SHIFT_MAX = 40;      // décalage d'une piste : ±40 % d'un pas
+
 const DIVS = [
     [8,  'Croches',  '2 par temps', 'Croches'],
     [12, 'Triolets', '3 par temps', 'Triolets de croches'],
@@ -116,22 +127,49 @@ const mkMel = (notes, ins) => {
 };
 
 /* ---------- État ---------- */
-const state = {
-    bpm: PRESETS.rock.bpm, swing: 0, div: 16, preset: 'rock', style: 'rock',      // style : dernier style choisi (« Générer » le suit, même si le rythme a été modifié ensuite)
-    pat: mkPat(PRESETS.rock.map), mute: {}, solo: {}, vol: {}, drumVol: 80, melVol: 70,
-    mel: [mkMel(DEFAULT_RIFF, 'piano'), emptyMel(), emptyMel()],       // couches de grilles [couche][degré][pas] ; la couche 0 est la ligne principale
-    root: 'C', scale: 'pentMin', octave: 4, range: 1,
-    timbre: 'piano',          // instrument des prochaines cases posées
-    insOct: {},               // décalage d'octaves de chaque instrument (−3…+3)
-    insVol: {},               // niveau de chaque instrument dans le mélange (0–150 %, 100 = niveau d'origine)
-    snd: {},                  // son de chaque instrument : patch FM (ou enveloppe pour les échantillons) + réglages de sortie (éditeur de son)
-    insMute: {},              // instrument coupé dans le mélange (bouton M)
-    insSolo: {},              // instrument écouté seul (bouton S) ; plusieurs solos s'additionnent
-    ext: {}, len: {}, dir: {}
-};
-Object.keys(SeqAudio.TIMBRES).forEach(k => { state.insOct[k] = SeqAudio.TIMBRES[k].shift; state.insVol[k] = 100; state.insMute[k] = false; state.insSolo[k] = false; state.snd[k] = FMSynth.defaultSound(k); });
-DRUMS.forEach(d => { state.mute[d.id] = false; state.solo[d.id] = false; state.vol[d.id] = 80; });
-LANES.forEach(id => { state.ext[id] = {}; state.len[id] = 0; state.dir[id] = 'fwd'; });
+// Un pattern neuf : batterie vide, mélodie vide, aucun réglage de pas ni de piste
+//   ext : réglages de pas · len : longueur de boucle (0 = toute la mesure) · dir : sens de lecture · off : décalage de la piste (% d'un pas)
+function freshPattern() {
+    const p = { pat: mkPat({}), mel: emptyMelLayers(), ext: {}, len: {}, dir: {}, off: {} };
+    LANES.forEach(id => { p.ext[id] = {}; p.len[id] = 0; p.dir[id] = 'fwd'; p.off[id] = 0; });
+    return p;
+}
+// state.pat, state.mel, state.ext, state.len, state.dir et state.off renvoient au pattern affiché (pats[cur]) : tout le code
+// de l'édition continue de parler de « la grille » sans savoir quel pattern c'est. Ils ne sont pas énumérables : seuls `pats` et `cur` sont enregistrés.
+function liveFields(st) {
+    PAT_FIELDS.forEach(f => Object.defineProperty(st, f, {
+        get() { return this.pats[this.cur][f]; },
+        set(v) { this.pats[this.cur][f] = v; },
+        configurable: true, enumerable: false
+    }));
+    return st;
+}
+// freshState() : un projet neuf (le motif d'exemple). Sert au démarrage, à « Nouveau » et avant de charger un projet,
+// pour que tout réglage absent d'un fichier retrouve sa valeur d'origine.
+function freshState() {
+    const st = {
+        bpm: PRESETS.rock.bpm, swing: 0, div: 16, preset: 'rock', style: 'rock',      // style : dernier style choisi (« Générer » le suit, même si le rythme a été modifié ensuite)
+        mute: {}, solo: {}, vol: {}, drumVol: 80, melVol: 70,
+        pats: Array.from({ length: NPAT }, freshPattern),      // les 8 patterns ; pats[cur] est celui qu'on voit et qu'on modifie (state.pat, state.mel… y renvoient)
+        cur: 0,
+        songOn: false, song: [],                               // chanson : suite de { p : pattern, r : nombre de mesures }
+        hum: { t: 0, v: 0 },                                   // humanisation : écart de placement et de force (0–100)
+        root: 'C', scale: 'pentMin', octave: 4, range: 1,
+        timbre: 'piano',          // instrument des prochaines cases posées
+        insOct: {},               // décalage d'octaves de chaque instrument (−3…+3)
+        insVol: {},               // niveau de chaque instrument dans le mélange (0–150 %, 100 = niveau d'origine)
+        snd: {},                  // son de chaque instrument : patch FM (ou enveloppe pour les échantillons) + réglages de sortie (éditeur de son)
+        insMute: {},              // instrument coupé dans le mélange (bouton M)
+        insSolo: {},              // instrument écouté seul (bouton S) ; plusieurs solos s'additionnent
+    };
+    st.pats[0].pat = mkPat(PRESETS.rock.map);
+    st.pats[0].mel = [mkMel(DEFAULT_RIFF, 'piano'), emptyMel(), emptyMel()];       // couches de grilles [couche][degré][pas] ; la couche 0 est la ligne principale
+    liveFields(st);
+    Object.keys(SeqAudio.TIMBRES).forEach(k => { st.insOct[k] = SeqAudio.TIMBRES[k].shift; st.insVol[k] = 100; st.insMute[k] = false; st.insSolo[k] = false; st.snd[k] = SoundLib.defaultSound(k); });
+    DRUMS.forEach(d => { st.mute[d.id] = false; st.solo[d.id] = false; st.vol[d.id] = 80; });
+    return st;
+}
+const state = freshState();
 
 function cleanExt(o) {
     if (!o || typeof o !== 'object') return null;
@@ -146,68 +184,86 @@ function cleanExt(o) {
     return Object.keys(e).length ? e : null;
 }
 
+// Reprend dans `state` ce qui est valide dans s (sauvegarde du navigateur, projet enregistré ou fichier importé) ;
+// tout le reste garde sa valeur actuelle.
+function parseInto(s) {
+    if (!s || typeof s !== 'object') return;
+    if ([8, 12, 16].indexOf(s.div) !== -1) state.div = s.div;
+    if (Number.isFinite(s.bpm)) state.bpm = clamp(Math.round(s.bpm), 40, 220);
+    if (Number.isFinite(s.swing)) state.swing = clamp(Math.round(s.swing), 0, 100);
+    state.preset = (typeof s.preset === 'string' && PRESETS[s.preset]) ? s.preset : '';
+    state.style = PRESETS[s.style] ? s.style : (state.preset || 'rock');
+    if (Number.isFinite(s.drumVol)) state.drumVol = clamp(Math.round(s.drumVol), 0, 100);
+    if (Number.isFinite(s.melVol)) state.melVol = clamp(Math.round(s.melVol), 0, 100);
+    DRUMS.forEach(d => {
+        if (s.vol && Number.isFinite(s.vol[d.id])) state.vol[d.id] = clamp(s.vol[d.id], 0, 100);
+        state.mute[d.id] = !!(s.mute && s.mute[d.id]);
+        state.solo[d.id] = !!(s.solo && s.solo[d.id]);
+    });
+    if (Theory.ROOTS.indexOf(s.root) !== -1) state.root = s.root;
+    if (Theory.SCALES.some(sc => sc.id === s.scale)) state.scale = s.scale;
+    if ([2, 3, 4, 5].indexOf(s.octave) !== -1) state.octave = s.octave;
+    if ([1, 2].indexOf(s.range) !== -1) state.range = s.range;
+    if (SeqAudio.TIMBRES[s.timbre]) state.timbre = s.timbre;
+    if (s.insOct && typeof s.insOct === 'object') {
+        Object.keys(state.insOct).forEach(k => { if (Number.isFinite(s.insOct[k])) state.insOct[k] = clamp(Math.round(s.insOct[k]), -3, 3); });
+    }
+    if (s.insVol && typeof s.insVol === 'object') {
+        Object.keys(state.insVol).forEach(k => { if (Number.isFinite(s.insVol[k])) state.insVol[k] = clamp(Math.round(s.insVol[k]), 0, 150); });
+    }
+    if (s.snd && typeof s.snd === 'object') Object.keys(state.snd).forEach(k => { state.snd[k] = SoundLib.cleanSound(k, s.snd[k]); });
+    ['insMute', 'insSolo'].forEach(f => {
+        if (s[f] && typeof s[f] === 'object') Object.keys(state[f]).forEach(k => { state[f][k] = !!s[f][k]; });
+    });
+    if (Array.isArray(s.pats)) {
+        for (let k = 0; k < NPAT; k++) if (s.pats[k] && typeof s.pats[k] === 'object') parsePattern(s.pats[k], state.pats[k]);
+        if (Number.isFinite(s.cur)) state.cur = clamp(Math.round(s.cur), 0, NPAT - 1);
+    } else {
+        parsePattern(s, state.pats[0]);         // anciennes sauvegardes : un seul motif, qui devient le pattern A
+    }
+    state.songOn = !!s.songOn;
+    if (Array.isArray(s.song)) {
+        state.song = s.song.slice(0, SONG_MAX)
+            .filter(e => e && Number.isFinite(e.p) && e.p >= 0 && e.p < NPAT)
+            .map(e => ({ p: Math.round(e.p), r: SONG_REPS.indexOf(e.r) !== -1 ? e.r : 1 }));
+    }
+    if (s.hum && typeof s.hum === 'object') {
+        if (Number.isFinite(s.hum.t)) state.hum.t = clamp(Math.round(s.hum.t), 0, 100);
+        if (Number.isFinite(s.hum.v)) state.hum.v = clamp(Math.round(s.hum.v), 0, 100);
+    }
+}
+// Reprend dans le pattern p ce qui est valide dans s (batterie, mélodie, réglages de pas et de piste).
+function parsePattern(s, p) {
+    DRUMS.forEach(d => {
+        const a = s.pat && s.pat[d.id];
+        if (Array.isArray(a)) p.pat[d.id] = Array.from({ length: MAXSTEPS }, (_, i) => (a[i] === 2 || a[i] === 3) ? a[i] : (a[i] ? 1 : 0));
+    });
+    if (Array.isArray(s.mel)) {
+        // Les anciennes sauvegardes notent 1 pour une case allumée : elle prend l'instrument alors choisi (state.timbre).
+        // Elles n'ont qu'une grille (degré × pas) : elle devient la couche 0.
+        const cell = v => (typeof v === 'string' && SeqAudio.TIMBRES[v]) ? v : (v ? state.timbre : 0);
+        const src = (Array.isArray(s.mel[0]) && Array.isArray(s.mel[0][0])) ? s.mel : [s.mel];
+        p.mel = Array.from({ length: LAYERS }, (_, l) => Array.from({ length: MAXROWS }, (_, r) =>
+            Array.from({ length: MAXSTEPS }, (_, i) => cell(src[l] && src[l][r] && src[l][r][i]))));
+    }
+    LANES.forEach(id => {
+        if (s.len && Number.isFinite(s.len[id])) p.len[id] = clamp(Math.round(s.len[id]), 0, MAXSTEPS);
+        if (s.dir && DIRS.some(d => d[0] === s.dir[id])) p.dir[id] = s.dir[id];
+        if (s.off && Number.isFinite(s.off[id])) p.off[id] = clamp(Math.round(s.off[id]), -SHIFT_MAX, SHIFT_MAX);
+        const bag = s.ext && s.ext[id];
+        if (bag && typeof bag === 'object') {
+            Object.keys(bag).forEach(k => {
+                const i = +k, e = cleanExt(bag[k]);
+                if (i >= 0 && i < MAXSTEPS && e) p.ext[id][i] = e;
+            });
+        }
+    });
+}
 function load() {
     try {
         const raw = localStorage.getItem(KEY);
-        if (!raw) return;
-        const s = JSON.parse(raw);
-        if (!s || typeof s !== 'object') return;
-        if ([8, 12, 16].indexOf(s.div) !== -1) state.div = s.div;
-        if (Number.isFinite(s.bpm)) state.bpm = clamp(Math.round(s.bpm), 40, 220);
-        if (Number.isFinite(s.swing)) state.swing = clamp(Math.round(s.swing), 0, 100);
-        state.preset = (typeof s.preset === 'string' && PRESETS[s.preset]) ? s.preset : '';
-        state.style = PRESETS[s.style] ? s.style : (state.preset || 'rock');
-        if (Number.isFinite(s.drumVol)) state.drumVol = clamp(Math.round(s.drumVol), 0, 100);
-        if (Number.isFinite(s.melVol)) state.melVol = clamp(Math.round(s.melVol), 0, 100);
-        DRUMS.forEach(d => {
-            const a = s.pat && s.pat[d.id];
-            if (Array.isArray(a)) state.pat[d.id] = Array.from({ length: MAXSTEPS }, (_, i) => (a[i] ? 1 : 0));
-            if (s.vol && Number.isFinite(s.vol[d.id])) state.vol[d.id] = clamp(s.vol[d.id], 0, 100);
-            state.mute[d.id] = !!(s.mute && s.mute[d.id]);
-            state.solo[d.id] = !!(s.solo && s.solo[d.id]);
-        });
-        if (Theory.ROOTS.indexOf(s.root) !== -1) state.root = s.root;
-        if (Theory.SCALES.some(sc => sc.id === s.scale)) state.scale = s.scale;
-        if ([2, 3, 4, 5].indexOf(s.octave) !== -1) state.octave = s.octave;
-        if ([1, 2].indexOf(s.range) !== -1) state.range = s.range;
-        if (SeqAudio.TIMBRES[s.timbre]) state.timbre = s.timbre;
-        if (s.insOct && typeof s.insOct === 'object') {
-            Object.keys(state.insOct).forEach(k => { if (Number.isFinite(s.insOct[k])) state.insOct[k] = clamp(Math.round(s.insOct[k]), -3, 3); });
-        }
-        if (s.insVol && typeof s.insVol === 'object') {
-            Object.keys(state.insVol).forEach(k => { if (Number.isFinite(s.insVol[k])) state.insVol[k] = clamp(Math.round(s.insVol[k]), 0, 150); });
-        }
-        if (s.snd && typeof s.snd === 'object') Object.keys(state.snd).forEach(k => { state.snd[k] = FMSynth.cleanSound(k, s.snd[k]); });
-        ['insMute', 'insSolo'].forEach(f => {
-            if (s[f] && typeof s[f] === 'object') Object.keys(state[f]).forEach(k => { state[f][k] = !!s[f][k]; });
-        });
-        if (Array.isArray(s.mel)) {
-            // Les anciennes sauvegardes notent 1 pour une case allumée : elle prend l'instrument alors choisi (state.timbre).
-            // Elles n'ont qu'une grille (degré × pas) : elle devient la couche 0.
-            const cell = v => (typeof v === 'string' && SeqAudio.TIMBRES[v]) ? v : (v ? state.timbre : 0);
-            const src = (Array.isArray(s.mel[0]) && Array.isArray(s.mel[0][0])) ? s.mel : [s.mel];
-            state.mel = Array.from({ length: LAYERS }, (_, l) => Array.from({ length: MAXROWS }, (_, r) =>
-                Array.from({ length: MAXSTEPS }, (_, i) => cell(src[l] && src[l][r] && src[l][r][i]))));
-        }
-        LANES.forEach(id => {
-            if (s.len && Number.isFinite(s.len[id])) state.len[id] = clamp(Math.round(s.len[id]), 0, MAXSTEPS);
-            if (s.dir && DIRS.some(d => d[0] === s.dir[id])) state.dir[id] = s.dir[id];
-            const bag = s.ext && s.ext[id];
-            if (bag && typeof bag === 'object') {
-                Object.keys(bag).forEach(k => {
-                    const i = +k, e = cleanExt(bag[k]);
-                    if (i >= 0 && i < MAXSTEPS && e) state.ext[id][i] = e;
-                });
-            }
-        });
+        if (raw) parseInto(JSON.parse(raw));
     } catch (e) { /* stockage indisponible : on garde les valeurs d'origine */ }
-}
-let saveT = null;
-function save() {
-    clearTimeout(saveT);
-    saveT = setTimeout(() => {
-        try { localStorage.setItem(KEY, JSON.stringify(state)); } catch (e) { /* ignoré */ }
-    }, 250);
 }
 
 const anySolo = () => DRUMS.some(d => state.solo[d.id]);
@@ -241,12 +297,15 @@ let playing = false, tick = 0, nextTime = 0, raf = 0;
 const queue = [];
 const stepDur = () => 60 / state.bpm / (state.div / 4);
 
-const effLen = id => { const l = state.len[id]; return l > 0 ? Math.min(l, state.div) : state.div; };
-const stepExt = (id, i) => state.ext[id][i] || null;
+// Les fonctions de lecture reçoivent le pattern `p` qui joue (celui de la chanson, pas forcément celui qu'on voit) ;
+// sans `p`, c'est le pattern affiché, ce qui sert à l'écran.
+const pat_ = p => p || state.pats[state.cur];
+const effLen = (id, p) => { const l = pat_(p).len[id]; return l > 0 ? Math.min(l, state.div) : state.div; };
+const stepExt = (id, i, p) => pat_(p).ext[id][i] || null;
 
 // Position de la piste au pas n : { idx : case jouée, cycle : nombre de tours de boucle déjà faits }
-function lanePos(id, n) {
-    const L = effLen(id), dir = state.dir[id];
+function lanePos(id, n, p) {
+    const L = effLen(id, p), dir = pat_(p).dir[id];
     if (dir === 'bwd') return { idx: L - 1 - (n % L), cycle: Math.floor(n / L) };
     if (dir === 'pp' && L > 1) {
         const P = 2 * L - 2, m = n % P;
@@ -274,10 +333,20 @@ function fxOf(e) {
     return { flt: e.flt == null ? 100 : e.flt, pan: e.pan || 0, rev: e.rev || 0 };
 }
 
-function playDrumHit(dr, e, when, d) {
+// Humanisation : petit écart aléatoire de placement (en secondes) et de force (facteur), selon les curseurs de la colonne de gauche
+// AU : le moteur son qui reçoit les coups : celui de l'appli, ou, pendant un export, un enregistreur (voir recordEvents).
+let AU = SeqAudio, humOn = true;
+const humTime = () => humOn && state.hum.t ? (Math.random() * 2 - 1) * HUM_TIME * state.hum.t / 100 : 0;
+const humVel = () => humOn && state.hum.v ? 1 + (Math.random() * 2 - 1) * HUM_VEL * state.hum.v / 100 : 1;
+// Un son ne part jamais dans le passé : un décalage vers l'avant est limité par l'horloge audio
+const safeWhen = t => Math.max(t, AU.now() + 0.003);
+
+function playDrumHit(dr, e, when, d, lv, off) {
     const rat = (e && e.rat) || 1, vol = e && e.vol != null ? e.vol / 100 : 1, fx = fxOf(e);
+    const t0 = when + (off || 0) / 100 * d, g = LV_GAIN[lv] || 1;
     for (let k = 0; k < rat; k++) {
-        SeqAudio.playDrum(dr.id, dr.drum, when + k * d / rat, 0.9 * vol * (k === 0 ? 1 : 0.78), fx);
+        AU.playDrum(dr.id, dr.drum, safeWhen(t0 + k * d / rat + humTime()),
+            Math.min(1.1, 0.9 * g * vol * humVel() * (k === 0 ? 1 : 0.78)), fx);
     }
 }
 
@@ -299,31 +368,33 @@ function refreshInsAudible() {
 const insGain = ins => (state.insVol[ins] == null ? 100 : state.insVol[ins]) / 100;     // niveau de l'instrument dans le mélange
 
 // L'instrument `ins` joue-t-il sur le degré r au pas i (sur n'importe quelle couche) ?
-const stackHas = (r, i, ins) => state.mel.some(grid => grid[r][i] === ins);
+const stackHas = (r, i, ins, p) => pat_(p).mel.some(grid => grid[r][i] === ins);
 
 // Notes de la mélodie jouées au pas `s` ; renvoie vrai si au moins une note part.
-function playMelodyStep(s, L, e, when, d) {
-    const dir = state.dir[MEL], hold = dir === 'fwd' || dir === 'bwd', sgn = dir === 'bwd' ? -1 : 1;
+function playMelodyStep(s, L, e, when, d, p) {
+    const dir = p.dir[MEL], hold = dir === 'fwd' || dir === 'bwd', sgn = dir === 'bwd' ? -1 : 1;
     const rat = (e && e.rat) || 1, vol = e && e.vol != null ? e.vol / 100 : 1, fx = fxOf(e), shift = 12 * ((e && e.oct) || 0);
     let any = false;
+    const t0 = when + (p.off[MEL] || 0) / 100 * d + humTime();      // un seul écart pour toutes les notes du pas : l'accord reste groupé
+    const hv = humVel();
     for (let r = 0; r < rowsInfo.length; r++) {
         for (let l = 0; l < LAYERS; l++) {
-            const ins = state.mel[l][r][s];
+            const ins = p.mel[l][r][s];
             if (!ins || !insAudible(ins)) continue;     // instrument coupé (M) ou hors solo (S)
-            if (state.mel.some((grid, q) => q < l && grid[r][s] === ins)) continue;     // même instrument déjà joué sur ce degré et ce pas
+            if (p.mel.some((grid, q) => q < l && grid[r][s] === ins)) continue;     // même instrument déjà joué sur ce degré et ce pas
             let len = 1;
             if (hold) {
                 // des cases voisines d'un même instrument ne font qu'une note tenue (quelle que soit la couche qui les porte) ;
                 // un autre instrument en commence une nouvelle
                 const prev = s - sgn;
-                if (prev >= 0 && prev < L && stackHas(r, prev, ins)) continue;     // suite d'une note tenue : déjà jouée
-                while (s + sgn * len >= 0 && s + sgn * len < L && stackHas(r, s + sgn * len, ins)) len++;
+                if (prev >= 0 && prev < L && stackHas(r, prev, ins, p)) continue;     // suite d'une note tenue : déjà jouée
+                while (s + sgn * len >= 0 && s + sgn * len < L && stackHas(r, s + sgn * len, ins, p)) len++;
             }
             const span = len * d, midi = clamp(rowsInfo[r].midi + 12 * (state.insOct[ins] || 0) + shift, 21, 108);
             for (let k = 0; k < rat; k++) {
                 const part = span / rat;
-                SeqAudio.playNote(midi, when + k * part, Math.max(0.05, part * (rat > 1 ? 0.8 : (len > 1 ? 0.98 : 0.86))),
-                    0.9 * vol * (k === 0 ? 1 : 0.85), fx, ins, insGain(ins));
+                AU.playNote(midi, safeWhen(t0 + k * part), Math.max(0.05, part * (rat > 1 ? 0.8 : (len > 1 ? 0.98 : 0.86))),
+                    Math.min(1.1, 0.9 * vol * hv * (k === 0 ? 1 : 0.85)), fx, ins, insGain(ins));
             }
             any = true;
         }
@@ -331,21 +402,60 @@ function playMelodyStep(s, L, e, when, d) {
     return any;
 }
 
+// Quel pattern joue au pas `t`, et à quel pas de sa propre boucle (n) ? Hors chanson, c'est le pattern affiché et n = t ;
+// en chanson, on suit la suite de { pattern, mesures } et n repart de 0 à chaque nouvelle entrée (les polymétries repartent avec elle).
+const sg = { on: false, i: 0, start: 0 };
+function resolveTick(t, g) {
+    g = g || sg;
+    const S = state.song;
+    if (!state.songOn || !S.length) { g.on = false; return { pi: state.cur, n: t, si: -1 }; }
+    if (!g.on) { g.on = true; g.i = 0; g.start = t; }
+    if (g.i >= S.length) g.i = 0;
+    let len = S[g.i].r * state.div;
+    while (t - g.start >= len) { g.start += len; g.i = (g.i + 1) % S.length; len = S[g.i].r * state.div; }
+    return { pi: S[g.i].p, n: t - g.start, si: g.i };
+}
+
+// Export : « joue » la mesure (ou la chanson entière) à blanc et note chaque coup, avec son instant en secondes depuis le début.
+// Même chemin que la lecture (probabilités, conditions, ratchets, accents, décalages, swing, mute / solo…) ; seul le destinataire change.
+function recordEvents(o) {
+    const events = [], g = { on: false, i: 0, start: 0 };
+    const rec = {
+        now: () => -1,                                  // rien ne part « dans le passé » : les instants restent ceux du motif
+        playDrum: (track, drum, when, vel, fx) => { events.push({ k: 'd', track, drum, when: Math.max(0, when), vel, fx }); },
+        playNote: (midi, when, dur, vel, fx, key, trim) => { events.push({ k: 'n', midi, when: Math.max(0, when), dur, vel, fx, key, trim }); }
+    };
+    const song = state.songOn && state.song.length > 0;
+    const bars = song ? state.song.reduce((t, e) => t + e.r, 0) : Math.max(1, o.bars | 0);
+    const ticks = bars * state.div, d = stepDur();
+    const savedAU = AU, savedHum = humOn;
+    AU = rec; humOn = !!o.human;
+    try {
+        for (let t = 0; t < ticks; t++) {
+            const lag = (state.div !== 12 && t % 2 === 1) ? (state.swing / 100) * 0.5 * d : 0;
+            const rt = resolveTick(t, g);
+            triggerTick(rt.n, t * d + lag, d, rt.pi);
+        }
+    } finally { AU = savedAU; humOn = savedHum; }
+    return { events, bars, ticks, seconds: ticks * d, bpm: state.bpm, song };
+}
+
 // Joue tout ce qui tombe sur ce pas ; renvoie la position et les pistes déclenchées (pour l'affichage).
-function triggerTick(n, when, d) {
-    const idx = [], fired = [];
+function triggerTick(n, when, d, pi) {
+    const p = state.pats[pi], idx = [], fired = [];
     DRUMS.forEach((dr, ti) => {
-        const pos = lanePos(dr.id, n);
+        const pos = lanePos(dr.id, n, p);
         idx[ti] = pos.idx;
-        if (!state.pat[dr.id][pos.idx] || !audible(dr.id)) return;
-        const e = stepExt(dr.id, pos.idx);
+        const lv = p.pat[dr.id][pos.idx];
+        if (!lv || !audible(dr.id)) return;
+        const e = stepExt(dr.id, pos.idx, p);
         if (!passes(e, pos.cycle)) return;
-        playDrumHit(dr, e, when, d);
+        playDrumHit(dr, e, when, d, lv, p.off[dr.id]);
         fired[ti] = true;
     });
-    const mp = lanePos(MEL, n), me = stepExt(MEL, mp.idx);
+    const mp = lanePos(MEL, n, p), me = stepExt(MEL, mp.idx, p);
     idx[DRUMS.length] = mp.idx;
-    if (passes(me, mp.cycle) && playMelodyStep(mp.idx, effLen(MEL), me, when, d)) fired[DRUMS.length] = true;
+    if (passes(me, mp.cycle) && playMelodyStep(mp.idx, effLen(MEL, p), me, when, d, p)) fired[DRUMS.length] = true;
     return { idx, fired };
 }
 
@@ -357,8 +467,9 @@ function schedule() {
         const d = stepDur();
         const lag = (state.div !== 12 && tick % 2 === 1) ? (state.swing / 100) * 0.5 * d : 0;
         const when = nextTime + lag;
-        const r = triggerTick(tick, when, d);
-        queue.push({ tick, time: when, idx: r.idx, fired: r.fired });
+        const rt = resolveTick(tick);
+        const r = triggerTick(rt.n, when, d, rt.pi);
+        queue.push({ tick, time: when, idx: r.idx, fired: r.fired, pi: rt.pi, si: rt.si });
         if (queue.length > 96) queue.shift();
         nextTime += d;
         tick++;
@@ -371,7 +482,10 @@ function draw() {
     const t = SeqAudio.now();
     let hit = null;
     while (queue.length && queue[0].time <= t) hit = queue.shift();
-    if (hit) { setNow(hit); flash(hit.fired); }
+    if (hit) {
+        if (hit.pi === state.cur) { setNow(hit); flash(hit.fired); } else clearNow();     // la tête de lecture ne se montre que sur le pattern affiché
+        markPlaying(hit.pi, hit.si);
+    }
     raf = requestAnimationFrame(draw);
 }
 
@@ -379,6 +493,7 @@ function start() {
     if (!SeqAudio.init()) return;
     playing = true;
     tick = 0;
+    sg.on = false;
     nextTime = SeqAudio.now() + 0.08;
     queue.length = 0;
     schedule();
@@ -393,6 +508,7 @@ function stop() {
     queue.length = 0;
     SeqAudio.stopAll();
     clearNow();
+    markPlaying(-1, -1);
     updatePlayUI();
 }
 const toggle = () => { if (playing) stop(); else start(); };
@@ -400,6 +516,7 @@ const toggle = () => { if (playing) stop(); else start(); };
 /* ---------- Grilles ---------- */
 const mainEl = $('main'), drumRowsEl = $('drumRows'), melRowsEl = $('melRows');
 let dBtns = [], dCols = [], dRows = [], leds = [], rcsD = [], chips = [];
+let accMode = false;                   // mode « Accents » : toucher un pas de batterie change sa force
 let sel = null, editing = false;       // pas ou piste ouverts dans le panneau de réglage ; mode « régler les pas »
 let mBtns = [], mCols = [], rcsM = [];       // mBtns[couche][degré][pas] ; mCols[pas] = toutes les cases de la colonne
 let shownExtra = new Set();                  // lignes de couches supplémentaires affichées (« couche:degré »)
@@ -495,6 +612,7 @@ function buildDrums() {
             for (let k = 0; k < g; k++) {
                 const i = b * g + k;
                 const sb = makeStep('d', ti, i, N, dr.name, state.pat[dr.id][i]);
+                paintLevel(sb, state.pat[dr.id][i]);
                 dBtns[ti][i] = sb;
                 dCols[i].push(sb);
                 grp.append(sb);
@@ -617,8 +735,13 @@ function buildAll() {
 function refreshDrumSteps() {
     const N = state.div;
     DRUMS.forEach((dr, ti) => {
-        for (let i = 0; i < N; i++) dBtns[ti][i].setAttribute('aria-pressed', state.pat[dr.id][i] ? 'true' : 'false');
+        for (let i = 0; i < N; i++) paintLevel(dBtns[ti][i], state.pat[dr.id][i]);
     });
+}
+// Case de batterie : éteinte (0), normale (1), accent (2) ou fantôme (3)
+function paintLevel(b, v) {
+    b.setAttribute('aria-pressed', v ? 'true' : 'false');
+    if (v > 1) { b.dataset.lv = String(v); b.title = LV_NAME[v]; } else { delete b.dataset.lv; b.removeAttribute('title'); }
 }
 function refreshMelSteps() {
     const N = state.div;
@@ -688,9 +811,9 @@ function blink(ti) {
 function flash(fired) {
     fired.forEach((on, ti) => { if (on && ti < DRUMS.length) blink(ti); });
 }
-function auditionDrum(ti) {
+function auditionDrum(ti, lv) {
     if (!SeqAudio.init()) return;
-    SeqAudio.playDrum(DRUMS[ti].id, DRUMS[ti].drum, SeqAudio.now() + 0.01);
+    SeqAudio.playDrum(DRUMS[ti].id, DRUMS[ti].drum, SeqAudio.now() + 0.01, 0.9 * (LV_GAIN[lv] || 1));
     blink(ti);
 }
 function auditionNote(r, ins) {
@@ -745,6 +868,14 @@ function renderVolumes() {
     paintRange($('volDrums'));
     paintRange($('volMel'));
 }
+function renderHum() {
+    $('humT').value = state.hum.t;
+    $('humV').value = state.hum.v;
+    $('humTOut').textContent = fmtVal(state.hum.t);
+    $('humVOut').textContent = fmtVal(state.hum.v);
+    paintRange($('humT'));
+    paintRange($('humV'));
+}
 function renderMelodyControls() {
     $('selRoot').value = state.root;
     $('selScale').value = state.scale;
@@ -765,7 +896,9 @@ function renderAll() {
     renderDiv();
     renderPreset();
     renderVolumes();
+    renderHum();
     renderMelodyControls();
+    renderPatterns();
 }
 
 /* ---------- Actions ---------- */
@@ -781,7 +914,12 @@ function setBpm(v) {
 //   « replace »  : (Alt + clic) remplace la case cliquée par l'instrument choisi
 //   « eraseAny » : (Maj + clic) efface la case cliquée, quel que soit son instrument
 function nextVal(g, r, i, l, e) {
-    if (g === 'd') return !state.pat[DRUMS[r].id][i];
+    if (g === 'd') {
+        const cur = state.pat[DRUMS[r].id][i];
+        if (accMode) return (cur + 1) % 4;                 // mode « Accents » : éteint → normal → accent → fantôme → éteint
+        if (e && e.altKey && cur) return cur % 3 + 1;      // Alt + clic sur un pas allumé : normal → accent → fantôme
+        return cur ? 0 : 1;
+    }
     if (e && e.shiftKey) return 'eraseAny';
     if (e && e.altKey) return 'replace';
     return stackHas(r, i, state.timbre) ? 'erase' : 'paint';
@@ -812,12 +950,12 @@ function applyMel(mode, l, r, i) {
 
 function apply(g, r, i, v, l) {
     if (g === 'd') {
-        const val = v ? 1 : 0, id = DRUMS[r].id;
+        const val = clamp(v | 0, 0, 3), id = DRUMS[r].id;
         if (state.pat[id][i] === val) return;
         state.pat[id][i] = val;
-        dBtns[r][i].setAttribute('aria-pressed', val ? 'true' : 'false');
+        paintLevel(dBtns[r][i], val);
         if (state.preset) { state.preset = ''; renderPreset(); }
-        if (val && !playing) auditionDrum(r);
+        if (val && !playing) auditionDrum(r, val);
     } else {
         if (!applyMel(v, l || 0, r, i)) return;
         for (let q = 0; q < LAYERS; q++) paintMelCell(q, r, i);
@@ -835,7 +973,7 @@ function applyPreset(key) {
     state.swing = p.swing;
     state.preset = key;
     state.style = key;
-    DRUMS.forEach(dr => { state.ext[dr.id] = {}; state.len[dr.id] = 0; state.dir[dr.id] = 'fwd'; });
+    DRUMS.forEach(dr => { state.ext[dr.id] = {}; state.len[dr.id] = 0; state.dir[dr.id] = 'fwd'; state.off[dr.id] = 0; });
     const changed = state.div !== p.div;
     state.div = p.div;
     if (changed) {
@@ -1047,7 +1185,7 @@ function paintStep(id, i) {
 function paintLen() {
     const N = state.div;
     LANES.forEach(id => {
-        const L = effLen(id), custom = L !== N || state.dir[id] !== 'fwd';
+        const L = effLen(id), custom = L !== N || state.dir[id] !== 'fwd' || !!state.off[id];
         const chip = id === MEL ? $('melLane') : chips[laneIdx(id)];
         if (chip) {
             chip.textContent = (id === MEL ? 'Boucle ' + L + ' ' : L) + dirSym(state.dir[id]);
@@ -1097,7 +1235,9 @@ function renderInsp() {
     $('inspStep').hidden = st == null;
     $('iOctBlock').hidden = !isMel;
     $('iMelHint').hidden = !isMel;
+    $('iLvBlock').hidden = isMel;
     if (st != null) {
+        if (!isMel) setSeg($('iLv'), state.pat[id][st] || 0);
         const e = stepExt(id, st) || {};
         Object.keys(SLIDERS).forEach(k => {
             const inp = $(SLIDERS[k][0]), v = e[k] != null ? e[k] : SLIDERS[k][1];
@@ -1114,6 +1254,9 @@ function renderInsp() {
     $('iLen').value = effLen(id);
     $('iLen').max = state.div;
     setSeg($('iDir'), state.dir[id]);
+    $('iOff').value = state.off[id] || 0;
+    paintRange($('iOff'));
+    $('iOffOut').textContent = fmtOff(state.off[id] || 0);
 }
 function openInspector(id, step) {
     sel = { lane: id, step };
@@ -1136,7 +1279,15 @@ function closeInspector() {
     document.body.classList.remove('insp-open');
     paintSel();
 }
+function setAccMode(v) {
+    accMode = v;
+    mainEl.classList.toggle('accenting', v);
+    $('accMode').setAttribute('aria-pressed', v ? 'true' : 'false');
+    $('accHint').hidden = !v;
+    if (v) setEditing(false);
+}
 function setEditing(v) {
+    if (v && accMode) setAccMode(false);
     editing = v;
     mainEl.classList.toggle('editing', v);
     ['editDrums', 'editMel'].forEach(id => $(id).setAttribute('aria-pressed', v ? 'true' : 'false'));
@@ -1152,6 +1303,23 @@ function setExt(k, val) {
     if (k === 'cond' && !val) delete e.inv;
     if (!Object.keys(e).length) delete bag[i];
     paintStep(id, i);
+    renderInsp();
+    save();
+}
+const fmtOff = v => v === 0 ? '0 %' : (v > 0 ? '+' : '−') + Math.abs(v) + ' %';
+// Force du coup (pas de batterie choisi dans le panneau) : 3 fantôme, 1 normal, 2 accent ; allume le pas s'il était éteint
+function setLevel(v) {
+    if (!sel || sel.step == null || sel.lane === MEL) return;
+    state.pat[sel.lane][sel.step] = v;
+    paintLevel(dBtns[laneIdx(sel.lane)][sel.step], v);
+    if (state.preset) { state.preset = ''; renderPreset(); }
+    renderInsp();
+    save();
+}
+function setOff(v) {
+    if (!sel) return;
+    state.off[sel.lane] = clamp(Math.round(+v) || 0, -SHIFT_MAX, SHIFT_MAX);
+    paintLen();
     renderInsp();
     save();
 }
@@ -1179,6 +1347,7 @@ insp.addEventListener('input', e => {
     else if (k === 'inv') setExt('inv', t.checked);
 });
 $('iLen').addEventListener('change', () => setLen($('iLen').value));
+$('iOff').addEventListener('input', () => setOff($('iOff').value));
 insp.addEventListener('click', e => {
     const b = e.target.closest('button');
     if (!b || !sel) return;
@@ -1189,9 +1358,10 @@ insp.addEventListener('click', e => {
         if (sel.step != null) { delete state.ext[sel.lane][sel.step]; paintStep(sel.lane, sel.step); renderInsp(); save(); }
         return;
     }
-    if (b.id === 'iResetLane') { state.len[sel.lane] = 0; state.dir[sel.lane] = 'fwd'; paintLen(); renderInsp(); save(); return; }
+    if (b.id === 'iResetLane') { state.len[sel.lane] = 0; state.dir[sel.lane] = 'fwd'; state.off[sel.lane] = 0; paintLen(); renderInsp(); save(); return; }
     const k = b.dataset.k, v = b.dataset.v;
-    if (k === 'rat' || k === 'oct') setExt(k, +v);
+    if (k === 'lv') setLevel(+v);
+    else if (k === 'rat' || k === 'oct') setExt(k, +v);
     else if (k === 'dir') setDir(v);
 });
 
@@ -1291,6 +1461,13 @@ $('seg').addEventListener('click', e => {
     save();
 });
 
+[['humT', 't'], ['humV', 'v']].forEach(([id, k]) => $(id).addEventListener('input', () => {
+    state.hum[k] = clamp(Math.round(+$(id).value) || 0, 0, 100);
+    renderHum();
+    save();
+}));
+$('accMode').addEventListener('click', () => setAccMode(!accMode));
+
 $('volDrums').addEventListener('input', () => {
     state.drumVol = +$('volDrums').value;
     SeqAudio.setDrumVolume(state.drumVol / 100);
@@ -1308,6 +1485,23 @@ $('asideToggle').addEventListener('click', () => {
     const open = $('aside').classList.toggle('open');
     $('asideToggle').setAttribute('aria-expanded', open ? 'true' : 'false');
 });
+
+// Texte d'aide du bas de page : replié derrière un petit bouton à icône ; l'état est gardé d'une visite à l'autre.
+(function () {
+    const KEY = 'sequenceur-pas-a-pas-aide-v1', btn = $('helpToggle'), body = $('helpBody');
+    function set(open, remember) {
+        body.hidden = !open;
+        btn.setAttribute('aria-expanded', open ? 'true' : 'false');
+        const label = open ? 'Masquer l\'aide' : 'Afficher l\'aide';
+        btn.title = label;
+        btn.setAttribute('aria-label', label);
+        if (remember) { try { localStorage.setItem(KEY, open ? '1' : '0'); } catch (e) { /* ignoré */ } }
+    }
+    let was = false;
+    try { was = localStorage.getItem(KEY) === '1'; } catch (e) { /* ignoré */ }
+    set(was, false);
+    btn.addEventListener('click', () => set(body.hidden, true));
+})();
 
 $('preset').addEventListener('change', () => { if ($('preset').value) applyPreset($('preset').value); });
 $('drumRand').addEventListener('click', randomDrums);
@@ -1349,6 +1543,8 @@ function renderInstruments() {
         b.classList.toggle('on', on);
         b.setAttribute('aria-checked', on ? 'true' : 'false');
         b.tabIndex = on ? 0 : -1;
+        const sn = state.snd && state.snd[b.dataset.ins];
+        if (window.SoundLib && sn) b.title = SeqAudio.TIMBRES[b.dataset.ins].label + ' · ' + SoundLib.voice(b.dataset.ins, sn.voice).label;
     });
     $('insName').textContent = def.label;
     $('insName').style.setProperty('--ic', def.color);
@@ -1360,9 +1556,9 @@ const insMixEl = $('insMix');
 let mixSig = '';
 function usedInstruments() {
     const used = new Set([state.timbre]);
-    state.mel.forEach(grid => {
+    state.pats.forEach(p => p.mel.forEach(grid => {
         for (let r = 0; r < rowsInfo.length; r++) for (let i = 0; i < state.div; i++) if (grid[r][i]) used.add(grid[r][i]);
-    });
+    }));
     return Object.keys(SeqAudio.TIMBRES).filter(k => used.has(k));
 }
 function renderMixer() {
@@ -1432,17 +1628,18 @@ function shiftInstrumentOctave(d) {
     save();
     if (!playing) auditionNote(0);
 }
-// Éditeur de son : patch FM de l'instrument, filtre, delay… (voir editor.js)
+// Éditeur de son : choix du son de l'instrument, attaque, brillance, écho… (voir editor.js)
 SoundEditor.init({
     timbres: SeqAudio.TIMBRES,
     getSound: k => state.snd[k],
-    commit: k => { SeqAudio.setSound(k, state.snd[k]); save(); },
+    commit: k => { SeqAudio.setSound(k, state.snd[k]); save(); renderInstruments(); },
     replace: (k, s) => { state.snd[k] = s; SeqAudio.setSound(k, s); save(); },
-    audition: (midi, k) => {
+    audition: (midi, k, dur, delay) => {
         if (!SeqAudio.init()) return;
         SeqAudio.want([k]);
-        SeqAudio.playNote(midi, SeqAudio.now() + 0.01, 0.7, 0.9, null, k, 1);
+        SeqAudio.playNote(midi, SeqAudio.now() + 0.01 + (delay || 0), dur || 0.7, 0.9, null, k, 1);
     },
+    baseNote: k => clamp(60 + 12 * (state.insOct[k] || 0), 24, 96),
     isPlaying: () => playing,
     select: k => { if (k !== state.timbre) setInstrument(k); }
 });
@@ -1571,6 +1768,13 @@ window.addEventListener('pointerup', () => {
 window.addEventListener('pointercancel', () => { if (drag) { clearTimeout(drag.lp); if (drag.g === 'm') syncRows(true); } drag = null; });
 
 document.addEventListener('keydown', e => {
+    if ((e.ctrlKey || e.metaKey) && !e.altKey && /^[zy]$/i.test(e.key)) {      // ⌘Z / Ctrl+Z : annuler ; ⇧⌘Z, Ctrl+Maj+Z ou Ctrl+Y : refaire
+        if (e.target && e.target.matches && e.target.matches('textarea, input[type="text"], input[type="number"], input[type="search"], [contenteditable]')) return;    // un champ de texte garde son propre « annuler »
+        if (Projects.isOpen() || Exporter.isOpen()) return;
+        e.preventDefault();
+        stepHistory(e.key.toLowerCase() === 'y' || e.shiftKey ? 1 : -1);
+        return;
+    }
     if (e.key === 'Escape' && sel) { closeInspector(); return; }
     if (e.code === 'Space' && (!document.activeElement || document.activeElement === document.body)) {
         e.preventDefault();
@@ -1585,17 +1789,286 @@ SeqAudio.onStatus(text => {
     chip.hidden = !text;
 });
 
+/* ---------- Sauvegarde, annuler / refaire, projets ---------- */
+// Tout changement passe par save() : l'état est gardé dans le navigateur (le motif reste au prochain lancement) et
+// ajouté à l'historique. Les gestes rapprochés (glisser un curseur, peindre plusieurs cases) ne font qu'une étape.
+// L'historique vit le temps de la session ; les projets enregistrés (projects.js) et les fichiers exportés restent.
+const HIST_MAX = 80;
+let saveT = null, hist = [], hi = -1;
+// Instantané de l'état. L'instrument choisi dans la palette n'en fait pas partie : c'est un outil, pas un contenu.
+function snap() {
+    const c = Object.assign({}, state);
+    delete c.timbre;
+    return JSON.stringify(c);
+}
+function writeLocal() {
+    try { localStorage.setItem(KEY, JSON.stringify(state)); } catch (e) { /* ignoré */ }
+}
+function updateHistUI() {
+    $('undo').disabled = hi <= 0;
+    $('redo').disabled = hi >= hist.length - 1;
+}
+function commitHistory() {
+    const s = snap();
+    if (s !== hist[hi]) {
+        hist.length = hi + 1;                 // un nouveau changement efface ce qu'il y avait à « refaire »
+        hist.push(s);
+        if (hist.length > HIST_MAX) hist.shift();
+        hi = hist.length - 1;
+    }
+    updateHistUI();
+    refreshPatHas();
+}
+function save() {
+    clearTimeout(saveT);
+    saveT = setTimeout(() => { saveT = null; writeLocal(); commitHistory(); }, 250);
+}
+function flushSave() {                        // un changement en attente est enregistré tout de suite (avant d'annuler, d'ouvrir un projet…)
+    if (!saveT) return;
+    clearTimeout(saveT);
+    saveT = null;
+    writeLocal();
+    commitHistory();
+}
+
+// Remet l'écran et le son d'aplomb après un changement de tout le contenu.
+function syncAll() {
+    if (sel) closeInspector();
+    queue.length = 0;
+    refreshRows();
+    Object.keys(state.snd).forEach(k => SeqAudio.setSound(k, state.snd[k]));
+    SeqAudio.setDrumVolume(state.drumVol / 100);
+    SeqAudio.setMelodyVolume(state.melVol / 100);
+    DRUMS.forEach(d => SeqAudio.setTrackVolume(d.id, state.vol[d.id] / 100));
+    SeqAudio.setTimbre(state.timbre);
+    SeqAudio.want(state.pats.flatMap(p => p.mel.flat(2)).filter(Boolean));    // charge les échantillons des instruments posés (tous patterns)
+    mixSig = '';                                         // le mélangeur est reconstruit
+    buildAll();
+    renderAll();
+}
+// Remplace tout le contenu par `data` (projet enregistré, fichier importé, étape de l'historique). Renvoie faux, sans
+// rien changer, si les données sont inutilisables.
+function applyData(data, keepTimbre) {
+    const backup = JSON.stringify(state), timbre = state.timbre;
+    try {
+        Object.assign(state, freshState());
+        parseInto(data);
+    } catch (e) {
+        Object.assign(state, freshState());
+        parseInto(JSON.parse(backup));
+        return false;
+    }
+    if (keepTimbre) state.timbre = timbre;
+    syncAll();
+    writeLocal();
+    return true;
+}
+function stepHistory(d) {
+    flushSave();
+    const n = hi + d;
+    if (n < 0 || n >= hist.length) return;
+    if (!applyData(JSON.parse(hist[n]), true)) return;
+    hi = n;
+    updateHistUI();
+}
+// Ouvre un projet : c'est une étape de l'historique comme une autre, on peut donc l'annuler.
+function openData(data) {
+    flushSave();
+    if (!applyData(data, false)) return false;
+    commitHistory();
+    return true;
+}
+// Nouveau projet : grilles vides, réglages de pas remis à zéro ; les sons (patchs des instruments) sont conservés.
+function blankData() {
+    const d = JSON.parse(JSON.stringify(state)), f = freshState();
+    d.pats = f.pats.map(p => Object.assign(p, { pat: mkPat({}), mel: emptyMelLayers() }));
+    d.cur = 0; d.songOn = false; d.song = [];
+    d.preset = '';
+    ['mute', 'solo'].forEach(k => { d[k] = f[k]; });
+    return d;
+}
+function projectSummary(d) {
+    const sc = d && Theory.SCALES.find(x => x.id === d.scale);
+    return (Number.isFinite(d && d.bpm) ? Math.round(d.bpm) + ' BPM' : '') + (sc ? ' · ' + Theory.rootLabel(d.root) + ' ' + sc.name : '');
+}
+
+Exporter.init({
+    record: recordEvents,
+    // Ce qu'il faut au moteur d'export pour sonner comme l'appli : sons édités et volumes
+    engineOptions: () => {
+        const track = {};
+        DRUMS.forEach(d => { track[d.id] = state.vol[d.id] / 100; });
+        return { sounds: JSON.parse(JSON.stringify(state.snd)), vols: { drum: state.drumVol / 100, mel: state.melVol / 100, track } };
+    },
+    info: () => {
+        const song = state.songOn && state.song.length > 0;
+        return {
+            bpm: state.bpm, div: state.div, song,
+            songBars: song ? state.song.reduce((t, e) => t + e.r, 0) : 0,
+            drums: DRUMS.map(d => ({ id: d.id, name: d.name }))
+        };
+    }
+});
+$('expBtn').addEventListener('click', () => Exporter.open());
+Projects.init({
+    getData: () => JSON.parse(JSON.stringify(state)),
+    open: openData,
+    blank: () => openData(blankData()),
+    summary: projectSummary
+});
+$('projBtn').addEventListener('click', () => Projects.open());
+$('undo').addEventListener('click', () => stepHistory(-1));
+$('redo').addEventListener('click', () => stepHistory(1));
+
+/* ---------- Patterns et chanson ---------- */
+const patBtnsEl = $('patBtns'), songListEl = $('songList');
+let patClip = null, songSel = -1, lastPlay = '';
+const patHas = k => {
+    const p = state.pats[k];
+    return DRUMS.some(d => p.pat[d.id].some(Boolean)) || p.mel.some(grid => grid.some(row => row.some(Boolean)));
+};
+function refreshPatHas() {
+    patBtnsEl.querySelectorAll('.pat-btn').forEach((b, k) => {
+        const has = patHas(k);
+        b.classList.toggle('has', has);
+        b.setAttribute('aria-label', 'Pattern ' + PAT_NAMES[k] + (has ? '' : ' (vide)'));
+    });
+}
+function renderPatterns() {
+    if (!patBtnsEl.children.length) {
+        for (let k = 0; k < NPAT; k++) {
+            const b = el('button', 'pat-btn', PAT_NAMES[k]);
+            b.type = 'button'; b.dataset.p = k;
+            patBtnsEl.append(b);
+        }
+        for (let k = 0; k < NPAT; k++) {
+            const b = el('button', null, PAT_NAMES[k]);
+            b.type = 'button'; b.dataset.k = 'sp'; b.dataset.v = k;
+            $('songPat').append(b);
+        }
+        SONG_REPS.forEach(n => {
+            const b = el('button', null, '×' + n);
+            b.type = 'button'; b.dataset.k = 'sr'; b.dataset.v = n;
+            $('songRep').append(b);
+        });
+    }
+    patBtnsEl.querySelectorAll('.pat-btn').forEach((b, k) => {
+        b.classList.toggle('on', k === state.cur);
+        b.setAttribute('aria-pressed', k === state.cur ? 'true' : 'false');
+    });
+    refreshPatHas();
+    $('patPaste').disabled = !patClip;
+    $('songToggle').setAttribute('aria-pressed', state.songOn ? 'true' : 'false');
+    $('songBox').hidden = !state.songOn;
+    renderSong();
+}
+function renderSong() {
+    songListEl.textContent = '';
+    if (songSel >= state.song.length) songSel = -1;
+    state.song.forEach((e, i) => {
+        const c = el('button', 'song-chip' + (i === songSel ? ' chosen' : ''), PAT_NAMES[e.p] + (e.r > 1 ? ' ×' + e.r : ''));
+        c.type = 'button'; c.dataset.i = i;
+        c.setAttribute('aria-label', 'Étape ' + (i + 1) + ' : pattern ' + PAT_NAMES[e.p] + ', ' + e.r + ' mesure' + (e.r > 1 ? 's' : ''));
+        songListEl.append(c);
+    });
+    const add = el('button', 'song-chip add', '+ Ajouter');
+    add.type = 'button'; add.id = 'songAdd'; add.disabled = state.song.length >= SONG_MAX;
+    add.title = 'Ajoute le pattern affiché à la fin de la chanson';
+    songListEl.append(add);
+    $('songEmpty').hidden = state.song.length > 0;
+    const e = state.song[songSel];
+    $('songEdit').hidden = !e;
+    if (e) { setSeg($('songPat'), e.p); setSeg($('songRep'), e.r); }
+    $('songLeft').disabled = songSel <= 0;
+    $('songRight').disabled = songSel < 0 || songSel >= state.song.length - 1;
+    lastPlay = '';
+}
+// Pattern en cours de lecture (pastille sur la lettre) et étape de la chanson
+function markPlaying(pi, si) {
+    const key = pi + ':' + si;
+    if (key === lastPlay) return;
+    lastPlay = key;
+    patBtnsEl.querySelectorAll('.pat-btn').forEach((b, k) => b.classList.toggle('playing', k === pi));
+    songListEl.querySelectorAll('.song-chip[data-i]').forEach((c, i) => c.classList.toggle('playing', i === si));
+}
+function setPattern(k) {
+    k = clamp(k | 0, 0, NPAT - 1);
+    if (k === state.cur) return;
+    flushSave();                      // les changements en attente restent attribués au pattern qu'on quitte
+    if (sel) closeInspector();
+    state.cur = k;
+    buildAll();
+    renderPreset();
+    renderPatterns();
+    save();
+}
+patBtnsEl.addEventListener('click', e => {
+    const b = e.target.closest('.pat-btn');
+    if (b) setPattern(+b.dataset.p);
+});
+$('patCopy').addEventListener('click', () => {
+    patClip = JSON.stringify(state.pats[state.cur]);
+    $('patPaste').disabled = false;
+    const b = $('patCopy'), t = b.textContent;
+    b.textContent = 'Copié ' + PAT_NAMES[state.cur];
+    setTimeout(() => { b.textContent = t; }, 1200);
+});
+$('patPaste').addEventListener('click', () => {
+    if (!patClip) return;
+    const np = freshPattern();
+    parsePattern(JSON.parse(patClip), np);
+    flushSave();
+    state.pats[state.cur] = np;
+    state.preset = '';
+    SeqAudio.want(np.mel.flat(2).filter(Boolean));
+    if (sel) closeInspector();
+    mixSig = '';
+    buildAll();
+    renderAll();
+    save();
+});
+$('songToggle').addEventListener('click', () => {
+    state.songOn = !state.songOn;
+    if (state.songOn && !state.song.length) {      // première fois : les patterns non vides, dans l'ordre
+        for (let k = 0; k < NPAT; k++) if (patHas(k)) state.song.push({ p: k, r: 1 });
+        if (!state.song.length) state.song.push({ p: state.cur, r: 1 });
+    }
+    songSel = -1;
+    renderPatterns();
+    save();
+});
+songListEl.addEventListener('click', e => {
+    const c = e.target.closest('.song-chip');
+    if (!c) return;
+    if (c.id === 'songAdd') {
+        if (state.song.length >= SONG_MAX) return;
+        state.song.push({ p: state.cur, r: 1 });
+        songSel = state.song.length - 1;
+        renderSong();
+        save();
+        return;
+    }
+    songSel = songSel === +c.dataset.i ? -1 : +c.dataset.i;
+    renderSong();
+});
+$('songEdit').addEventListener('click', e => {
+    const b = e.target.closest('button');
+    const en = state.song[songSel];
+    if (!b || !en) return;
+    if (b.dataset.k === 'sp') en.p = +b.dataset.v;
+    else if (b.dataset.k === 'sr') en.r = +b.dataset.v;
+    else if (b.id === 'songDel') { state.song.splice(songSel, 1); songSel = Math.min(songSel, state.song.length - 1); }
+    else if (b.id === 'songLeft' && songSel > 0) { state.song.splice(songSel - 1, 0, state.song.splice(songSel, 1)[0]); songSel--; }
+    else if (b.id === 'songRight' && songSel < state.song.length - 1) { state.song.splice(songSel + 1, 0, state.song.splice(songSel, 1)[0]); songSel++; }
+    else return;
+    renderSong();
+    save();
+});
+
 /* ---------- Démarrage ---------- */
 load();
-refreshRows();
-Object.keys(state.snd).forEach(k => SeqAudio.setSound(k, state.snd[k]));
-SeqAudio.setDrumVolume(state.drumVol / 100);
-SeqAudio.setMelodyVolume(state.melVol / 100);
-DRUMS.forEach(d => SeqAudio.setTrackVolume(d.id, state.vol[d.id] / 100));
-SeqAudio.setTimbre(state.timbre);
-SeqAudio.want(state.mel.flat(2).filter(Boolean));    // charge les échantillons des instruments déjà posés
-buildAll();
-renderAll();
+syncAll();
+commitHistory();
 updatePlayUI();
 setEditing(false);
 })();

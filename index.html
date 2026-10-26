@@ -22,6 +22,22 @@
 
     <header class="hdr">
         <span class="hdr-title">Séquenceur pas à pas</span>
+        <div class="hdr-tools" role="group" aria-label="Historique et projets">
+            <button type="button" id="undo" class="btn-ico" disabled title="Annuler (⌘Z ou Ctrl+Z)" aria-label="Annuler">
+                <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5.5 3 2.5 6l3 3"/><path d="M2.8 6H9a4 4 0 0 1 0 8H6"/></svg>
+            </button>
+            <button type="button" id="redo" class="btn-ico" disabled title="Refaire (⇧⌘Z ou Ctrl+Y)" aria-label="Refaire">
+                <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m10.5 3 3 3-3 3"/><path d="M13.2 6H7a4 4 0 0 0 0 8h3"/></svg>
+            </button>
+            <button type="button" id="projBtn" class="btn-ico btn-proj" title="Projets : enregistrer, ouvrir, exporter, importer" aria-label="Projets : enregistrer, ouvrir, exporter, importer" aria-haspopup="dialog">
+                <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2.5 2.5h8l3 3v8h-11z"/><path d="M5 2.5v3.5h5V2.5"/><path d="M5 13.5V9.5h6v4"/></svg>
+                <span class="btn-ico-label">Projets</span>
+            </button>
+            <button type="button" id="expBtn" class="btn-ico btn-proj" title="Exporter : fichier audio WAV, pistes séparées, MIDI" aria-label="Exporter : fichier audio WAV, pistes séparées, MIDI" aria-haspopup="dialog">
+                <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 2v8"/><path d="m4.8 7 3.2 3.2L11.2 7"/><path d="M2.5 11.5v2h11v-2"/></svg>
+                <span class="btn-ico-label">Exporter</span>
+            </button>
+        </div>
         <div class="hdr-right">
             <div class="stepper" role="group" aria-label="Tempo">
                 <button type="button" id="bpmDown" aria-label="Ralentir d'un battement par minute">−</button>
@@ -85,6 +101,21 @@
                 </div>
 
                 <div class="block">
+                    <span class="lbl">Humanisation</span>
+                    <div class="vrow">
+                        <span>Placement</span>
+                        <input id="humT" class="rng" type="range" min="0" max="100" step="1" value="0" aria-label="Humanisation du placement">
+                        <output id="humTOut" for="humT">0</output>
+                    </div>
+                    <div class="vrow">
+                        <span>Force</span>
+                        <input id="humV" class="rng" type="range" min="0" max="100" step="1" value="0" aria-label="Humanisation de la force">
+                        <output id="humVOut" for="humV">0</output>
+                    </div>
+                    <p class="hint">De petits écarts aléatoires de placement (jusqu'à 18 ms) et de force, pour un jeu moins mécanique.</p>
+                </div>
+
+                <div class="block">
                     <span class="lbl">Volumes</span>
                     <div class="vrow">
                         <span>Batterie</span>
@@ -105,18 +136,54 @@
 
         <main id="main" class="main">
 
+            <section class="panel patbar" aria-labelledby="patTitle">
+                <div class="bar">
+                    <div class="bar-left">
+                        <h2 id="patTitle">Patterns</h2>
+                        <div id="patBtns" class="pat-btns" role="group" aria-labelledby="patTitle"></div>
+                    </div>
+                    <div class="bar-tools">
+                        <button type="button" id="patCopy" class="btn-sm" title="Copier le pattern affiché (batterie, mélodie, réglages)">Copier</button>
+                        <button type="button" id="patPaste" class="btn-sm" disabled title="Coller par-dessus le pattern affiché">Coller</button>
+                        <button type="button" id="songToggle" class="btn-sm btn-toggle" aria-pressed="false" title="Enchaîner les patterns : la chanson">Chanson</button>
+                    </div>
+                </div>
+                <div id="songBox" class="song-box" hidden>
+                    <div id="songList" class="song-list" aria-label="Étapes de la chanson"></div>
+                    <p id="songEmpty" class="hint" hidden>La chanson est vide : ajoutez des étapes, ou arrêtez le mode Chanson pour jouer le pattern affiché.</p>
+                    <div id="songEdit" class="song-edit" hidden>
+                        <div class="fx">
+                            <span class="lbl">Pattern de l'étape</span>
+                            <div id="songPat" class="seg" role="group" aria-label="Pattern de l'étape"></div>
+                        </div>
+                        <div class="fx">
+                            <span class="lbl">Mesures</span>
+                            <div id="songRep" class="seg" role="group" aria-label="Nombre de mesures"></div>
+                        </div>
+                        <div class="song-tools">
+                            <button type="button" id="songLeft" class="btn-sm" aria-label="Avancer cette étape">←</button>
+                            <button type="button" id="songRight" class="btn-sm" aria-label="Reculer cette étape">→</button>
+                            <button type="button" id="songDel" class="btn-sm">Retirer</button>
+                        </div>
+                    </div>
+                    <p class="hint">En mode Chanson, la lecture suit la suite d'étapes (et reboucle à la fin) ; le pattern affiché sert à les modifier. Une pastille marque le pattern qui joue.</p>
+                </div>
+            </section>
+
             <section class="panel" aria-labelledby="drumTitle">
                 <div class="bar">
                     <div class="bar-left">
                         <h2 id="drumTitle">Batterie</h2>
                     </div>
                     <div class="bar-tools">
+                        <button type="button" id="accMode" class="btn-sm btn-toggle" aria-pressed="false" title="Toucher un pas change sa force : normal, accent, fantôme">Accents</button>
                         <button type="button" id="editDrums" class="btn-sm btn-toggle" aria-pressed="false" title="Touchez un pas pour régler sa probabilité, sa condition, ses répétitions et ses verrous">Régler les pas</button>
                         <button type="button" id="drumGen" class="btn-sm btn-gen">Générer</button>
                         <button type="button" id="drumRand" class="btn-sm" title="Rythme tiré au hasard, sans tenir compte du style">Au hasard</button>
                         <button type="button" id="drumClear" class="btn-sm">Vider</button>
                     </div>
                 </div>
+                <p id="accHint" class="acc-hint" hidden>Mode Accents : chaque touche fait passer le pas de éteint à normal, puis accent (anneau blanc), puis fantôme (assombri), puis éteint. Glissez pour appliquer la même force à plusieurs pas.</p>
                 <p class="edit-hint">Touchez un pas pour ouvrir ses réglages. Le coin marqué signale une condition, des répétitions ou un verrou ; la transparence, une probabilité.</p>
                 <div class="grid-card">
                     <div class="row ruler">
@@ -151,8 +218,12 @@
                 </div>
                 <div class="ins-bar">
                     <div class="ins-head">
-                        <span class="lbl" id="insLabel">Instrument des cases</span>
-                        <button type="button" id="insEdit" class="btn-sm" title="Régler le son de l'instrument choisi : algorithme FM, opérateurs, filtre, delay…">Éditer le son</button>
+                        <div class="ins-title">
+                            <span class="lbl" id="insLabel">Instrument des cases</span>
+                            <button type="button" id="insEdit" class="btn-ico btn-ico-sm" title="Éditer le son de l'instrument choisi : choix du son, attaque, brillance, écho…" aria-label="Éditer le son de l'instrument choisi">
+                                <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m11 2.5 2.5 2.5L5.5 13 2 14l1-3.5z"/><path d="m9.5 4 2.5 2.5"/></svg>
+                            </button>
+                        </div>
                         <div class="ins-oct" role="group" aria-label="Octave de l'instrument choisi">
                             <span class="ins-who">Octave <b id="insName">Piano</b></span>
                             <div class="stepper">
@@ -175,17 +246,28 @@
                 </div>
             </section>
 
-            <p class="foot">
+            <div class="help">
+                <button type="button" id="helpToggle" class="help-toggle" aria-expanded="false" aria-controls="helpBody" title="Afficher l'aide" aria-label="Afficher l'aide">
+                    <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 5l4 4 4-4"/></svg>
+                </button>
+                <div id="helpBody" class="help-body" hidden>
+                    <p class="foot">
                 Cliquez sur une case pour poser ou retirer un pas, ou glissez le long d'une ligne pour en peindre plusieurs.
                 Dans la mélodie, des cases voisines d'un même instrument sur une même ligne forment une seule note tenue.
                 Cliquer une case déjà prise par un autre instrument ajoute l'instrument choisi sur une ligne en dessous (3 couches au plus) ; recliquer là où il est le retire. Alt + clic remplace la case cliquée ; Maj + clic l'efface.
                 Cliquez sur le nom d'une piste ou d'une note pour l'écouter. Barre d'espace : jouer / arrêter.
                 « Au hasard » tire librement ; « Générer » propose une autre version dans le style choisi (batterie : variation du rythme du style ; mélodie : phrase qui suit le style et colle à la batterie posée).
             </p>
-            <p class="foot foot-2">
+                    <p class="foot foot-2">
                 Régler un pas : bouton « Régler les pas » (puis toucher un pas), ou clic droit, ou appui long au doigt.
-                Le petit bouton de chaque piste (ex. « 16→ ») règle la longueur de sa boucle et son sens de lecture.
+                Le petit bouton de chaque piste (ex. « 16→ ») règle la longueur de sa boucle, son sens de lecture et son décalage.
             </p>
+                    <p class="foot foot-2">
+                Bouton « Accents » : toucher un pas de batterie le fait passer de normal à accent, puis fantôme.
+                Patterns A à H en haut de la page (Copier / Coller), « Chanson » pour les enchaîner. « Exporter » : fichier audio WAV (mix ou une piste par fichier) et MIDI.
+            </p>
+                </div>
+            </div>
 
         </main>
     </div>
@@ -199,6 +281,15 @@
 
     <div id="inspStep" class="insp-body">
         <p id="iMelHint" class="hint" hidden>Pour la mélodie, ces réglages valent pour toutes les notes de ce pas.</p>
+
+        <div id="iLvBlock" class="fx" hidden>
+            <div class="row-between"><span class="lbl">Force du coup</span></div>
+            <div id="iLv" class="seg" role="group" aria-label="Force du coup">
+                <button type="button" data-k="lv" data-v="3">Fantôme</button>
+                <button type="button" data-k="lv" data-v="1">Normal</button>
+                <button type="button" data-k="lv" data-v="2">Accent</button>
+            </div>
+        </div>
 
         <div class="fx">
             <div class="row-between"><span class="lbl">Probabilité</span><span id="iProbOut" class="badge purple">100 %</span></div>
@@ -277,7 +368,7 @@
     </div>
 
     <div class="insp-body insp-lane">
-        <div class="fx-title">Boucle de la piste</div>
+        <div class="fx-title">Boucle et décalage de la piste</div>
         <div class="fx">
             <div class="row-between">
                 <span class="lbl">Longueur</span>
@@ -299,7 +390,12 @@
                 <button type="button" data-k="dir" data-v="rnd" title="Aléatoire">? Hasard</button>
             </div>
         </div>
-        <button type="button" id="iResetLane" class="btn-sm">Boucle normale</button>
+        <div class="fx">
+            <div class="row-between"><span class="lbl">Décalage</span><span id="iOffOut" class="badge blue">0 %</span></div>
+            <input id="iOff" class="rng" type="range" min="-40" max="40" step="1" value="0" aria-label="Décalage de la piste">
+            <p class="hint">Pousse toute la piste en avance (−) ou en retard (+), en % d'un pas. Une caisse claire un peu en retard donne un jeu « laid back ».</p>
+        </div>
+        <button type="button" id="iResetLane" class="btn-sm">Remettre à zéro</button>
     </div>
 </section>
 
@@ -308,12 +404,15 @@
 <script src="app/vendor/soundfont-player.min.js"></script>
 <script src="app/audio/local-soundfonts.js"></script>
 <script src="app/audio/drum-synths.js"></script>
-<script src="app/audio/synth-voices.js"></script>
 <script src="app/audio/fm-synth.js"></script>
+<script src="app/audio/sound-lib.js"></script>
+<script src="app/audio/synth-voices.js"></script>
 <script src="app/keepalive.js"></script>
 <script src="app/theory.js"></script>
 <script src="app/audio-engine.js"></script>
 <script src="app/editor.js"></script>
+<script src="app/projects.js"></script>
+<script src="app/export.js"></script>
 <script src="app/sequencer.js"></script>
 <script src="app/offline.js"></script>
 </body>

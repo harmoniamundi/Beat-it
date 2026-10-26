@@ -7,7 +7,7 @@
 //    l'installation (si un seul fichier manque, l'installation échoue et l'ancienne version reste en place).
 //    Servi « réseau d'abord » (3 s maximum) : en ligne, on a toujours la dernière version publiée ; hors ligne
 //    ou réseau trop lent, on prend la copie gardée. Aucun numéro de version à penser à changer.
-//  - « sounds » : les ~8 Mo d'échantillons d'instruments. Servi « cache d'abord » (ils ne changent jamais) et
+//  - « sounds » : les ~17 Mo d'échantillons d'instruments (piano, basse, trompette et les sons maison de app/sounds/Bank/). Servi « cache d'abord » (ils ne changent jamais) et
 //    téléchargé en arrière-plan, un par un, quand la page le demande (message « precache-sounds »).
 // Si on ajoute ou retire un fichier de l'appli, il faut aussi le mettre (ou l'enlever) dans SHELL_FILES ci-dessous.
 
@@ -30,13 +30,16 @@ const SHELL_FILES = [
     'app/vendor/soundfont-player.min.js',
     'app/audio/local-soundfonts.js',
     'app/audio/drum-synths.js',
-    'app/audio/synth-voices.js',
     'app/audio/fm-synth.js',
+    'app/audio/sound-lib.js',
+    'app/audio/synth-voices.js',
     'app/offline.js',
     'app/keepalive.js',
     'app/theory.js',
     'app/audio-engine.js',
     'app/editor.js',
+    'app/projects.js',
+    'app/export.js',
     'app/sequencer.js'
 ];
 

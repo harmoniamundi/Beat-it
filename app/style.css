@@ -89,6 +89,21 @@ option, optgroup { background: var(--c-card); color: #fff; }
     font-size: 0.75rem; font-weight: 700; color: var(--t-soft); letter-spacing: 0.05em; text-transform: uppercase;
 }
 .hdr-right { display: flex; align-items: center; gap: 0.5rem; flex: none; }
+.hdr-tools { display: flex; align-items: center; gap: 0.35rem; flex: none; margin-right: auto; }
+@media (max-width: 479px) { .hdr-title { display: none; } .hdr-tools { margin-right: 0; } }
+
+/* Boutons à icône : annuler, refaire, projets (en-tête) et crayon « éditer le son » */
+.btn-ico {
+    display: inline-flex; align-items: center; justify-content: center; gap: 0.4rem; flex: none;
+    min-width: 2.25rem; height: 2.25rem; padding: 0 0.5rem; border-radius: 0.5rem;
+    background: var(--c-btn); color: var(--t-soft); border: 1px solid var(--c-btn-line);
+    font-size: 0.75rem; font-weight: 600; line-height: 1; transition: background 0.15s, color 0.15s, opacity 0.15s;
+}
+.btn-ico:hover:not(:disabled) { background: var(--c-btn-hover); color: #fff; }
+.btn-ico:disabled { opacity: 0.35; cursor: default; }
+.btn-ico-label { display: none; }
+@media (min-width: 640px) { .btn-proj { padding: 0 0.75rem; } .btn-ico-label { display: inline; } }
+.btn-ico-sm { min-width: 1.75rem; width: 1.75rem; height: 1.75rem; padding: 0; border-radius: 9999px; }
 .body { display: flex; flex-direction: column; flex: 1; min-height: 0; }
 
 /* Barre latérale (réglages) : repliée par défaut sur téléphone et tablette */
@@ -348,6 +363,20 @@ option, optgroup { background: var(--c-card); color: #fff; }
 .main.editing .step { cursor: crosshair; }
 .foot-2 { padding-top: 0; }
 
+/* Aide du bas de page : repliée derrière un petit bouton à icône (chevron) */
+.help { padding: 0.5rem 1rem 1rem; }
+@media (min-width: 1024px) { .help { padding-inline: 1.5rem; } }
+.help-toggle {
+    display: inline-flex; align-items: center; justify-content: center; width: 1.9rem; height: 1.9rem; border-radius: 9999px;
+    background: var(--c-btn); color: var(--t-muted); border: 1px solid var(--c-btn-line); transition: background 0.15s, color 0.15s;
+}
+.help-toggle:hover { background: var(--c-btn-hover); color: #fff; }
+.help-toggle svg { transition: transform 0.15s; }
+.help-toggle[aria-expanded="true"] svg { transform: rotate(180deg); }
+.help-body { margin-top: 0.4rem; }
+.help .foot { padding-inline: 0; }
+.help .foot-2 { padding-bottom: 0.25rem; }
+
 /* Petit bouton de boucle de chaque piste (longueur + sens) */
 .lane {
     flex: none; min-width: 2.6rem; padding: 0.2rem 0.35rem; border-radius: 0.375rem; border: 1px solid transparent;
@@ -408,6 +437,7 @@ body.insp-open { padding-bottom: 56vh; }
 /* ===== Instruments de la mélodie : palette (une couleur par instrument) ===== */
 .ins-bar { padding: 0.75rem 1rem 0; display: flex; flex-direction: column; gap: 0.5rem; }
 .ins-head { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 0.5rem 0.75rem; }
+.ins-title { display: flex; align-items: center; gap: 0.45rem; }
 .ins-oct { display: flex; align-items: center; gap: 0.5rem; }
 .ins-who { font-size: 0.75rem; font-weight: 600; color: var(--t-muted); }
 .ins-who b { color: var(--ic, #fff); font-weight: 700; }
@@ -548,32 +578,61 @@ body.sed-open { overflow: hidden; }
 .env-h.on, .env-h:hover { fill: var(--ic); }
 @media (pointer: coarse) { .env-h { r: 8; } }
 
-/* Boutons rotatifs (page « param » et enveloppe des échantillons) */
-.sed-knobs { display: flex; flex-wrap: wrap; gap: 0.9rem 1.1rem; justify-content: space-around; padding: 0.25rem 0; }
-.sed-knob { display: flex; flex-direction: column; align-items: center; gap: 0.3rem; }
-.sed-dial { position: relative; width: 3.6rem; height: 3.6rem; cursor: ns-resize; touch-action: none; border-radius: 50%; }
-.sed-dial svg { width: 100%; height: 100%; display: block; }
-.kn-bg { fill: var(--c-inset); stroke: var(--c-line-card); stroke-width: 1.5; }
-.kn-arc { stroke: var(--ic); stroke-width: 3; stroke-linecap: round; }
-.kn-dot { stroke: var(--t-soft); stroke-width: 2; stroke-linecap: round; }
-.sed-kv { position: absolute; inset: 0; display: grid; place-items: center; font: 700 0.6875rem/1 var(--f-mono); color: #fff; pointer-events: none; padding-top: 0.55rem; text-align: center; }
-.sed-dial:focus-visible { outline: 2px solid var(--blue-400); outline-offset: 2px; }
-
-/* Patchs d'usine, import / export */
-.sed-cart { display: grid; gap: 0.4rem; grid-template-columns: repeat(auto-fill, minmax(8rem, 1fr)); }
-.sed-cart-b { display: flex; align-items: center; gap: 0.5rem; padding: 0.55rem 0.7rem; border-radius: 0.5rem; border: 1px solid var(--c-btn-line); background: var(--c-btn); color: var(--t-soft); font-size: 0.8125rem; font-weight: 600; text-align: left; }
-.sed-cart-b:hover { background: var(--c-btn-hover); color: #fff; }
-.sed-dot { flex: none; width: 0.7rem; height: 0.7rem; border-radius: 50%; }
+/* Import / export */
 .sed-ta { width: 100%; height: 10rem; resize: vertical; padding: 0.5rem; border-radius: 0.5rem; border: 1px solid var(--c-line-card); background: var(--c-inset); color: var(--t-soft); font: 0.6875rem/1.4 var(--f-mono); user-select: text; -webkit-user-select: text; }
 .sed-btns { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; }
 .btn-sm:disabled { opacity: 0.4; cursor: default; }
 
-/* Onglets du bas et clavier d'essai */
-.sed-tabs { flex: none; display: flex; align-items: center; gap: 0.4rem; padding: 0.5rem 0.75rem; background: var(--c-header); border-top: 1px solid var(--c-line); overflow-x: auto; }
-.sed-name { flex: none; padding: 0.3rem 0.8rem; border-radius: 0.5rem; border: 2px solid var(--ic); color: #fff; font: 800 0.8125rem/1.1 var(--f-sys); letter-spacing: 0.03em; text-transform: uppercase; margin-right: 0.4rem; }
-.sed-tab { flex: none; padding: 0.3rem 0.9rem; border-radius: 9999px; border: 2px solid var(--c-btn-line); color: var(--t-soft); font: 700 0.8125rem/1.1 var(--f-sys); }
-.sed-tab:hover { border-color: var(--ic); color: #fff; }
-.sed-tab[aria-pressed="true"] { background: var(--ic); border-color: var(--ic); color: #111; }
+/* ----- Partie simple : choix du son et curseurs en français ----- */
+.sed-sl-grid { grid-template-columns: repeat(auto-fit, minmax(min(100%, 19rem), 1fr)); }
+.sed-card .sed-h { font-size: 0.75rem; }
+.sed-h-big { font-size: 0.8125rem; color: var(--t-soft); }
+.sed-note-s { font-size: 0.6875rem; }
+.sed-voices { display: grid; gap: 0.45rem; grid-template-columns: repeat(auto-fill, minmax(9.5rem, 1fr)); }
+.sed-voice {
+    display: flex; flex-direction: column; align-items: flex-start; gap: 0.1rem; padding: 0.55rem 0.7rem; border-radius: 0.6rem; text-align: left;
+    border: 1px solid var(--c-btn-line); background: var(--c-btn); color: var(--t-soft); transition: background 0.15s, border-color 0.15s;
+}
+.sed-voice:hover { background: var(--c-btn-hover); color: #fff; }
+.sed-voice[aria-checked="true"] { border-color: var(--ic); background: color-mix(in srgb, var(--ic) 24%, var(--c-btn)); color: #fff; box-shadow: 0 0 0 1px var(--ic); }
+.sed-voice-n { font-size: 0.875rem; font-weight: 700; line-height: 1.2; }
+.sed-voice-k { font-size: 0.6875rem; font-weight: 600; color: var(--t-muted); letter-spacing: 0.03em; }
+.sed-voice[aria-checked="true"] .sed-voice-k { color: color-mix(in srgb, var(--ic) 70%, #fff); }
+.sed-voice.adv { border-style: dashed; }
+
+.sed-sl { display: flex; flex-direction: column; gap: 0.1rem; min-width: 0; margin: 0; }
+.sed-sl-top { display: flex; align-items: baseline; justify-content: space-between; gap: 0.5rem; }
+.sed-sl-name { font-size: 0.8125rem; font-weight: 700; color: var(--t-soft); }
+.sed-sl-val { font: 700 0.75rem/1 var(--f-mono); color: var(--ic); white-space: nowrap; }
+.sed-rng { --sl-accent: var(--ic); }
+.sed-sl-ends { display: flex; justify-content: space-between; font-size: 0.6875rem; color: var(--t-faint); margin-top: -0.2rem; }
+.sed-sl-desc { font-size: 0.6875rem; line-height: 1.35; color: var(--t-muted); }
+.sed-card > .sed-sl + .sed-sl { padding-top: 0.45rem; border-top: 1px solid var(--c-line-card); }
+.sed-seg { margin-top: 0.15rem; }
+.sed-seg button { padding: 0.4rem 0; font-size: 0.75rem; }
+.sed-seg button[aria-pressed="true"] { background: var(--ic); color: #111; font-weight: 700; }
+.sed-sub { margin: 0.35rem 0 0; font-size: 0.6875rem; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: var(--t-muted); }
+
+/* Réglages avancés (repliés) */
+.sed-adv { border: 1px solid var(--c-line-card); border-radius: 0.75rem; background: color-mix(in srgb, var(--c-card) 55%, transparent); }
+.sed-adv > summary {
+    display: flex; align-items: baseline; gap: 0.6rem; padding: 0.7rem 0.85rem; cursor: pointer; list-style: none;
+    font-size: 0.8125rem; font-weight: 700; color: var(--t-soft);
+}
+.sed-adv > summary::-webkit-details-marker { display: none; }
+.sed-adv > summary::before { content: "›"; display: inline-block; width: 0.8rem; color: var(--t-muted); font-size: 1rem; transition: transform 0.15s; }
+.sed-adv[open] > summary::before { transform: rotate(90deg); }
+.sed-adv > summary small { font-size: 0.6875rem; font-weight: 500; color: var(--t-faint); }
+.sed-adv > summary:focus-visible { outline: 2px solid var(--blue-400); outline-offset: -2px; border-radius: 0.75rem; }
+.sed-adv-in { display: flex; flex-direction: column; gap: 0.75rem; padding: 0 0.6rem 0.75rem; }
+.sed-fm { display: flex; flex-direction: column; gap: 0.6rem; }
+
+/* Barre du bas (nom du son, écouter, remettre à zéro) et clavier d'essai */
+.sed-foot { flex: none; display: flex; align-items: center; gap: 0.5rem; padding: 0.5rem 0.75rem; background: var(--c-header); border-top: 1px solid var(--c-line); overflow-x: auto; }
+.sed-name { flex: 1 1 auto; min-width: 5rem; padding-left: 0.5rem; border-left: 4px solid var(--ic); color: #fff; font: 700 0.875rem/1.2 var(--f-sys); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.sed-foot .btn-sm { flex: none; padding: 0.4rem 0.75rem; white-space: nowrap; }
+.sed-play { display: inline-flex; align-items: center; gap: 0.4rem; background: var(--ic); border-color: var(--ic); color: #111; font-weight: 700; }
+.sed-play:hover { background: color-mix(in srgb, var(--ic) 82%, #fff); color: #000; }
 .sed-kbd { flex: none; display: flex; gap: 2px; height: 5.2rem; padding: 0.3rem 0.5rem 0.5rem; overflow-x: auto; background: var(--c-inset); touch-action: pan-x; }
 .sed-k { position: relative; flex: 1 0 2.1rem; background: #eef2f7; border: 1px solid #94a3b8; border-radius: 0 0 0.35rem 0.35rem; color: #475569; padding: 0; }
 .sed-k.dn { background: color-mix(in srgb, var(--ic) 75%, #fff); }
@@ -585,3 +644,69 @@ body.sed-open { overflow: hidden; }
     .sed-grid { gap: 0.5rem; }
     .sed-kbd { height: 4.6rem; }
 }
+
+/* ===== Fenêtre « Projets » (projects.js) ===== */
+.proj-back { position: fixed; inset: 0; z-index: 95; display: flex; align-items: flex-end; justify-content: center; background: rgba(0, 0, 0, 0.55); }
+.proj-back[hidden] { display: none; }
+.proj {
+    width: 100%; max-width: 32rem; max-height: 88vh; max-height: 88dvh; overflow-y: auto; display: flex; flex-direction: column; gap: 1.1rem;
+    background: var(--c-card); border-top: 1px solid var(--c-line-card); border-radius: 0.9rem 0.9rem 0 0;
+    box-shadow: 0 -8px 28px rgba(0, 0, 0, 0.55); padding: 0.75rem 1rem calc(1rem + env(safe-area-inset-bottom));
+}
+@media (min-width: 640px) {
+    .proj-back { align-items: center; }
+    .proj { border: 1px solid var(--c-line-card); border-radius: 0.9rem; padding: 1rem 1.25rem 1.25rem; }
+}
+body.proj-open { overflow: hidden; }
+.proj .insp-head { position: static; margin: 0; padding: 0; }
+.proj-line { display: flex; gap: 0.5rem; }
+.txt {
+    flex: 1; min-width: 0; background: var(--c-inset); color: #fff; font-size: 0.875rem; padding: 0.45rem 0.65rem;
+    border-radius: 0.5rem; border: 1px solid var(--c-btn-line);
+}
+.txt::placeholder { color: var(--t-faint); }
+.proj-msg { margin: 0; min-height: 1.1em; font-size: 0.75rem; color: var(--emerald-400, #34d399); }
+.proj-msg.bad { color: var(--rose-400, #fb7185); }
+.proj-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 0.4rem; max-height: 14rem; overflow-y: auto; }
+.proj-item { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 0.4rem 0.75rem; padding: 0.5rem 0.65rem; background: var(--c-inset); border: 1px solid var(--c-line); border-radius: 0.5rem; }
+.proj-info { display: flex; flex-direction: column; min-width: 0; flex: 1 1 10rem; }
+.proj-info strong { font-size: 0.85rem; color: #fff; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.proj-info .hint { padding: 0; }
+.proj-acts, .proj-files { display: flex; flex-wrap: wrap; gap: 0.4rem; }
+.btn-del:hover { background: rgba(244, 63, 94, 0.25); color: #fff; }
+.proj .btn-sm:disabled { opacity: 0.4; cursor: default; }
+.proj .hint { padding-inline: 0; }
+
+/* ---------- Accents (force des coups de batterie) ---------- */
+.step[data-lv="2"] { box-shadow: inset 0 0 0 2px rgba(255, 255, 255, 0.92), inset 0 -2px 0 rgba(0, 0, 0, 0.22); filter: brightness(1.18); }
+.step[data-lv="3"] { filter: brightness(0.5) saturate(0.85); }
+.step[aria-pressed="true"][data-lv="2"].now { box-shadow: 0 0 0 2px rgba(96, 165, 250, 0.7), inset 0 0 0 2px rgba(255, 255, 255, 0.92); }
+.step[aria-pressed="true"][data-lv="3"].now { filter: brightness(0.9); }
+.acc-hint { margin: 0.6rem 1rem 0; font-size: 0.75rem; color: var(--blue-300); }
+@media (min-width: 1024px) { .acc-hint { margin-inline: 1.5rem; } }
+
+/* ---------- Patterns et chanson ---------- */
+.pat-btns { display: flex; flex-wrap: wrap; gap: 0.3rem; }
+.pat-btn {
+    position: relative; min-width: 2.1rem; height: 2rem; padding: 0 0.5rem; border-radius: 0.4rem; font-size: 0.8125rem; font-weight: 700;
+    color: var(--t-muted); background: var(--c-inset); border: 1px solid var(--c-line); transition: color 0.15s, background 0.15s;
+}
+.pat-btn:hover { color: #fff; }
+.pat-btn.has::before { content: ""; position: absolute; top: 3px; left: 3px; width: 5px; height: 5px; border-radius: 50%; background: var(--t-muted); opacity: 0.8; }
+.pat-btn.on { background: var(--blue-600); border-color: var(--blue-500); color: #fff; }
+.pat-btn.on.has::before { background: #fff; }
+.pat-btn.playing::after { content: ""; position: absolute; right: 3px; bottom: 3px; width: 6px; height: 6px; border-radius: 50%; background: #34d399; box-shadow: 0 0 6px #34d399; }
+.song-box { padding: 0 1rem 1rem; display: flex; flex-direction: column; gap: 0.6rem; }
+@media (min-width: 1024px) { .song-box { padding-inline: 1.5rem; } }
+.song-list { display: flex; flex-wrap: wrap; gap: 0.35rem; }
+.song-chip {
+    position: relative; height: 2rem; padding: 0 0.7rem; border-radius: 0.4rem; font-size: 0.8125rem; font-weight: 700;
+    color: var(--t-soft); background: var(--c-inset); border: 1px solid var(--c-line);
+}
+.song-chip.add { color: var(--t-muted); font-weight: 600; border-style: dashed; }
+.song-chip.chosen { border-color: var(--blue-400); color: #fff; }
+.song-chip.playing { background: rgba(52, 211, 153, 0.18); border-color: #34d399; color: #fff; }
+.song-chip:disabled { opacity: 0.4; }
+.song-edit { display: flex; flex-direction: column; gap: 0.6rem; padding: 0.75rem; border-radius: 0.5rem; background: var(--c-inset); border: 1px solid var(--c-line); max-width: 28rem; }
+.song-edit .seg { background: var(--c-bg, #1c1c1e); }
+.song-tools { display: flex; gap: 0.4rem; }

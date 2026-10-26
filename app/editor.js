@@ -1,18 +1,23 @@
-// editor.js — éditeur de son de la mélodie, dans l'esprit de l'écran d'un synthé FM à 6 opérateurs (KQ Dixie / DX7).
-// Quatre pages, comme les onglets du synthé :
-//   cart  : patchs d'usine à charger dans l'instrument         edit  : algorithme, opérateurs, LFO, enveloppe de hauteur
-//   param : filtre, delay, accord, panoramique, volume          setup : copier, importer / exporter, remise à zéro
-// Les instruments à échantillons (piano, basse, trompette) n'ont pas de patch FM : « edit » y règle leur enveloppe.
-// Le moteur de son est dans audio/fm-synth.js et audio-engine.js ; ce fichier ne touche qu'à l'interface.
+// editor.js — éditeur de son de la mélodie.
 //
-// SoundEditor.init({ timbres, getSound(k), commit(k), replace(k, son), audition(midi, k), isPlaying(), select(k) })
+// Un seul écran, du plus simple au plus technique :
+//   1. « Son » : les sons proposés pour l'instrument (nylon / acier, violon / violoncelle…) ; on touche, on entend.
+//   2. Des curseurs en français, groupés par ce qu'ils font : forme de la note (attaque, relâchement), timbre (brillance,
+//      grain), mouvement (vibrato, chorus), espace (écho, réverbération), niveau (volume, panoramique, accord).
+//   3. « Réglages avancés » (repliés) : le détail du synthé (forme d'onde, voix, filtre, enveloppe), la durée et les
+//      répétitions de l'écho, et — pour le son « Synthé FM » — l'éditeur complet à 6 opérateurs façon DX7.
+// Un clavier d'essai et un bouton « Écouter » restent en bas.
+// Le moteur de son est dans audio/ ; ce fichier ne touche qu'à l'interface.
+//
+// SoundEditor.init({ timbres, getSound(k), commit(k), replace(k, son), audition(midi, k, durée, délai), baseNote(k),
+//                    isPlaying(), select(k), onClose() })
 // SoundEditor.open(k) ouvre l'éditeur sur l'instrument k.
 
 const SoundEditor = (() => {
     const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
-    const FM = FMSynth;
-    let deps = null, root = null, body = null, insRow = null, tabsRow = null, nameBtn = null, kbdEl = null;
-    let cur = 'organ', page = 'edit', lastNote = 60, views = [], undoSnap = null, audT = 0;
+    const FM = FMSynth, Lib = SoundLib;
+    let deps = null, root = null, body = null, insRow = null, nameEl = null, kbdEl = null, undoBtn = null;
+    let cur = 'organ', lastNote = 60, views = [], undoSnap = null, audT = 0, advOpen = false;
 
     function h(tag, cls, content) {
         const e = document.createElement(tag);
@@ -33,6 +38,7 @@ const SoundEditor = (() => {
     const snd = () => deps.getSound(cur);
     const fm = () => snd().fm;
     const isFm = () => !!snd().fm;
+    const kindOf = () => Lib.voice(cur, snd().voice).kind;
     const accent = () => deps.timbres[cur].color;
 
     // Après chaque réglage : on enregistre, on rafraîchit ce qui en dépend, on fait entendre le résultat (un instant après).
@@ -112,64 +118,6 @@ const SoundEditor = (() => {
         b.addEventListener('click', () => { set((get() + 1) % labels.length); paint(); touch(); });
         paint();
         wrap.append(h('span', 'sed-l', label), b);
-        views.push(paint);
-        return wrap;
-    }
-    // Bouton rotatif : on le fait glisser verticalement (ou flèches / molette). pos 0–1 ↔ valeur grâce à from / to.
-    function knob(label, get, set, o) {
-        const wrap = h('div', 'sed-knob');
-        const dial = h('div', 'sed-dial');
-        dial.tabIndex = 0;
-        dial.setAttribute('role', 'slider');
-        dial.setAttribute('aria-label', label);
-        dial.setAttribute('aria-valuemin', o.min);
-        dial.setAttribute('aria-valuemax', o.max);
-        const svg = s('svg', { viewBox: '0 0 44 44' });
-        s('circle', { cx: 22, cy: 22, r: 17, class: 'kn-bg' }, svg);
-        const arc = s('path', { class: 'kn-arc', fill: 'none' }, svg);
-        const dot = s('line', { class: 'kn-dot' }, svg);
-        const val = h('span', 'sed-kv');
-        dial.append(svg, val);
-        const toPos = o.to || ((v) => (v - o.min) / (o.max - o.min));
-        const fromPos = o.from || ((p) => o.min + p * (o.max - o.min));
-        const A0 = 135, A1 = 405;                                  // le cadran couvre 270°
-        const pt = (a, r) => [22 + r * Math.cos(a * Math.PI / 180), 22 + r * Math.sin(a * Math.PI / 180)];
-        const paint = () => {
-            const v = get(), p = clamp(toPos(v), 0, 1), a = A0 + (A1 - A0) * p;
-            const [x0, y0] = pt(A0, 20), [x1, y1] = pt(a, 20), [dx, dy] = pt(a, 10), [ex, ey] = pt(a, 16);
-            arc.setAttribute('d', 'M' + x0 + ' ' + y0 + ' A20 20 0 ' + (a - A0 > 180 ? 1 : 0) + ' 1 ' + x1 + ' ' + y1);
-            dot.setAttribute('x1', dx); dot.setAttribute('y1', dy); dot.setAttribute('x2', ex); dot.setAttribute('y2', ey);
-            val.textContent = o.fmt ? o.fmt(v) : String(v);
-            dial.setAttribute('aria-valuenow', v);
-        };
-        const put = (p) => {
-            let v = fromPos(clamp(p, 0, 1));
-            const st = o.step || 1;
-            v = Math.round(v / st) * st;
-            v = clamp(+v.toFixed(4), o.min, o.max);
-            set(v); paint(); touch();
-        };
-        let drag = null;
-        dial.addEventListener('pointerdown', (e) => {
-            drag = { y: e.clientY, p: toPos(get()) };
-            dial.setPointerCapture(e.pointerId);
-            dial.focus();
-            e.preventDefault();
-        });
-        dial.addEventListener('pointermove', (e) => { if (drag) put(drag.p + (drag.y - e.clientY) / (e.shiftKey ? 600 : 160)); });
-        const end = () => { drag = null; };
-        dial.addEventListener('pointerup', end); dial.addEventListener('pointercancel', end);
-        dial.addEventListener('wheel', (e) => { e.preventDefault(); put(toPos(get()) + (e.deltaY < 0 ? 1 : -1) * 0.02); }, { passive: false });
-        dial.addEventListener('keydown', (e) => {
-            const k = { ArrowUp: 1, ArrowRight: 1, ArrowDown: -1, ArrowLeft: -1, PageUp: 5, PageDown: -5 }[e.key];
-            if (!k) return;
-            e.preventDefault();
-            const st = o.step || 1;
-            const v = clamp(get() + k * st, o.min, o.max);
-            set(+v.toFixed(4)); paint(); touch();
-        });
-        paint();
-        wrap.append(h('span', 'sed-l', label), dial);
         views.push(paint);
         return wrap;
     }
@@ -395,83 +343,205 @@ const SoundEditor = (() => {
         return c;
     }
 
-    /* ---------- Pages ---------- */
-    function pageEdit() {
-        if (!isFm()) return pageEnv();
-        const top = h('div', 'sed-grid sed-top3', [algoCard(), globalCard(), lfoCard(), pitchEnvCard()]);
+
+    /* ---------- Curseurs à étiquettes (partie simple de l'éditeur) ---------- */
+    const pct = (v, max) => Math.round(v / max * 100) + ' %';
+    const dec1 = (x) => x.toFixed(1).replace('.', ',');
+    const secs = (t) => (t < 0.095 ? Math.round(t * 1000) + ' ms' : t < 10 ? t.toFixed(2).replace('.', ',') + ' s' : Math.round(t) + ' s');
+    const none = (fn) => (v) => (v === 0 ? 'aucun' : fn(v));
+    // name : nom du réglage · lo / hi : ce qu'on obtient aux deux bouts · desc : une phrase pour comprendre · fmt : valeur affichée
+    const OUTSL = {
+        att:   { name: 'Attaque', lo: 'immédiate', hi: 'lente', desc: 'Vitesse à laquelle le son monte au début de la note.', fmt: (v) => secs(Lib.attSec(v)) },
+        rel:   { name: 'Relâchement', lo: 'sec', hi: 'long', desc: 'Durée de l\'extinction quand la note se termine.', fmt: (v) => secs(Lib.relSec(v)) },
+        cut:   { name: 'Brillance', lo: 'sombre', hi: 'claire', desc: 'Adoucit le son ou le rend plus brillant.', fmt: (v) => (v >= 127 ? 'ouverte' : pct(v, 127)) },
+        drv:   { name: 'Grain', lo: 'net', hi: 'saturé', desc: 'Ajoute de la chaleur, puis de la distorsion.', fmt: none((v) => v + ' %') },
+        vib:   { name: 'Vibrato', lo: 'aucun', hi: 'marqué', desc: 'La hauteur ondule doucement, comme une voix ou un violon.', fmt: none((v) => v + ' %') },
+        cho:   { name: 'Chorus', lo: 'seul', hi: 'épais', desc: 'Double le son avec un léger décalage : plus large, plus riche.', fmt: none((v) => v + ' %') },
+        dmix:  { name: 'Écho', lo: 'aucun', hi: 'fort', desc: 'Répète le son en s\'estompant (durée et répétitions : réglages avancés).', fmt: none((v) => v + ' %') },
+        rev:   { name: 'Réverbération', lo: 'sec', hi: 'salle', desc: 'Place le son dans une pièce plus ou moins grande.', fmt: none((v) => v + ' %') },
+        vol:   { name: 'Volume', lo: 'bas', hi: 'fort', desc: 'Niveau de cet instrument (le mélangeur règle aussi son niveau).', fmt: (v) => pct(v, 127) },
+        pan:   { name: 'Panoramique', lo: 'gauche', hi: 'droite', desc: 'Place l\'instrument entre les deux haut-parleurs.', fmt: (v) => (v === 64 ? 'centre' : v < 64 ? 'gauche ' + (64 - v) : 'droite ' + (v - 64)) },
+        tune:  { name: 'Accord', lo: 'plus grave', hi: 'plus aigu', desc: 'Désaccorde légèrement, en centièmes de ton.', fmt: (v) => (v > 0 ? '+' : '') + v + ' ct' },
+        res:   { name: 'Résonance du filtre', lo: 'douce', hi: 'perçante', desc: 'Accentue la région que « Brillance » vient de couper.', fmt: none((v) => v + ' %') },
+        vrt:   { name: 'Vitesse du vibrato', lo: 'lent', hi: 'rapide', desc: 'Nombre d\'ondulations par seconde.', fmt: (v) => dec1(Lib.vibHz(v)) + ' Hz' },
+        dtime: { name: 'Durée de l\'écho', lo: 'court', hi: 'long', desc: 'Temps entre une note et sa répétition (indépendant du tempo).', fmt: (v) => secs(Lib.echoSec(v)) },
+        dfb:   { name: 'Répétitions de l\'écho', lo: 'une', hi: 'beaucoup', desc: 'Combien de fois l\'écho se répète.', fmt: (v) => v + ' %' }
+    };
+    const SYNSL = {
+        pw:   { name: 'Largeur de l\'impulsion', lo: 'étroite', hi: 'carrée', desc: 'Une impulsion étroite sonne nasale, une large sonne creuse.', fmt: (v) => v + ' %' },
+        det:  { name: 'Désaccord des voix', lo: 'unisson', hi: 'large', desc: 'Écart entre les voix superposées : plus il est grand, plus le son est large.', fmt: (v) => v + ' ct' },
+        sub:  { name: 'Sous-octave', lo: 'aucune', hi: 'forte', desc: 'Ajoute une note une octave plus bas, pour le poids.', fmt: none((v) => v + ' %') },
+        fc:   { name: 'Filtre : ouverture', lo: 'fermé', hi: 'ouvert', desc: 'Plus le filtre est ouvert, plus le son est brillant (suit la hauteur de la note).', fmt: (v) => pct(v, 99) },
+        q:    { name: 'Filtre : résonance', lo: 'douce', hi: 'perçante', desc: 'Accentue la fréquence de coupure : son plus « vocal » ou « acide ».', fmt: none((v) => v + ' %') },
+        fenv: { name: 'Filtre : ouverture au départ', lo: 'aucune', hi: 'forte', desc: 'Le filtre s\'ouvre à chaque attaque puis se referme : l\'effet « wow ».', fmt: none((v) => v + ' %') },
+        fdec: { name: 'Filtre : durée de cette fermeture', lo: 'brève', hi: 'longue', desc: 'Temps que met le filtre à se refermer.', fmt: (v) => secs(Lib.decSec(v)) },
+        dec:  { name: 'Descente', lo: 'rapide', hi: 'lente', desc: 'Temps que met le volume pour redescendre au « niveau tenu ».', fmt: (v) => secs(Lib.decSec(v)) },
+        sus:  { name: 'Niveau tenu', lo: 'rien', hi: 'plein', desc: 'Volume pendant que la note est tenue (0 : note qui s\'éteint toute seule).', fmt: (v) => pct(v, 99) }
+    };
+
+    // Valeur « d'origine » d'un réglage pour le son choisi (double-clic sur le curseur)
+    const originalOf = (src, key) => {
+        const o = Lib.withVoice(cur, null, snd().voice);
+        return (src === 'syn' ? o.syn : o.out)[key];
+    };
+
+    function slider(src, key) {
+        const spec = (src === 'syn' ? SYNSL : OUTSL)[key], R = (src === 'syn' ? Lib.SYN : Lib.OUT)[key];
+        const bag = () => (src === 'syn' ? snd().syn : snd().out);
+        const wrap = h('label', 'sed-sl');
+        const val = h('output', 'sed-sl-val');
+        const inp = h('input', 'rng sed-rng');
+        inp.type = 'range'; inp.min = R[0]; inp.max = R[1]; inp.step = 1;
+        inp.setAttribute('aria-label', spec.name);
+        inp.title = 'Double-clic : valeur d\'origine du son';
+        const paint = () => {
+            const v = bag()[key];
+            if (+inp.value !== v) inp.value = v;
+            inp.style.setProperty('--sl-p', String((v - R[0]) / (R[1] - R[0])));
+            val.textContent = spec.fmt(v);
+            inp.setAttribute('aria-valuetext', spec.fmt(v));
+        };
+        inp.addEventListener('input', () => { bag()[key] = +inp.value; touch(); });
+        inp.addEventListener('dblclick', () => { bag()[key] = originalOf(src, key); touch(); });
+        wrap.append(
+            h('span', 'sed-sl-top', [h('span', 'sed-sl-name', spec.name), val]),
+            inp,
+            h('span', 'sed-sl-ends', [h('span', null, spec.lo), h('span', null, spec.hi)]),
+            h('span', 'sed-sl-desc', spec.desc)
+        );
+        views.push(paint);
+        return wrap;
+    }
+    // Choix parmi quelques valeurs (forme d'onde, nombre de voix)
+    function choice(label, desc, items, get, set) {
+        const wrap = h('div', 'sed-sl');
+        const seg = h('div', 'seg sed-seg');
+        seg.setAttribute('role', 'group');
+        seg.setAttribute('aria-label', label);
+        const btns = items.map((it) => {
+            const b = h('button', null, it[1]);
+            b.type = 'button';
+            b.addEventListener('click', () => { set(it[0]); touch(); });
+            seg.append(b);
+            return [it[0], b];
+        });
+        views.push(() => btns.forEach((p) => { p[1].classList.toggle('on', p[0] === get()); p[1].setAttribute('aria-pressed', p[0] === get() ? 'true' : 'false'); }));
+        wrap.append(h('span', 'sed-sl-top', h('span', 'sed-sl-name', label)), seg, h('span', 'sed-sl-desc', desc));
+        return wrap;
+    }
+
+    /* ---------- Choix du son ---------- */
+    const KIND_LABEL = { sf: 'Échantillon', bank: 'Échantillon', synth: 'Synthé', fm: 'FM · DX7' };
+    function pickVoice(id) {
+        if (id === snd().voice) { touch(); return; }
+        undoSnap = FM.clone(snd());
+        deps.replace(cur, Lib.withVoice(cur, snd(), id));
+        views = [];                                  // les anciens curseurs ne correspondent plus au nouveau son
+        touch();
+        renderPage();
+    }
+    function voicesCard() {
+        const list = Lib.voiceList(cur);
+        const c = card('Son');
+        const grid = h('div', 'sed-voices');
+        grid.setAttribute('role', 'radiogroup');
+        grid.setAttribute('aria-label', 'Son de ' + deps.timbres[cur].label);
+        list.forEach((v) => {
+            const b = h('button', 'sed-voice' + (v.kind === 'fm' ? ' adv' : ''), [h('span', 'sed-voice-n', v.label), h('span', 'sed-voice-k', KIND_LABEL[v.kind])]);
+            b.type = 'button';
+            b.setAttribute('role', 'radio');
+            b.setAttribute('aria-checked', v.id === snd().voice ? 'true' : 'false');
+            b.addEventListener('click', () => pickVoice(v.id));
+            grid.append(b);
+        });
+        c.append(grid);
+        const k = kindOf();
+        c.append(h('p', 'sed-note', k === 'fm'
+            ? 'Synthèse FM à 6 opérateurs, façon DX7 : tous les réglages sont dans « Réglages avancés » plus bas.'
+            : k === 'synth' ? 'Synthétiseur calculé par l\'appareil. Les réglages de forme d\'onde, de filtre et de voix sont dans « Réglages avancés ».'
+                : 'Enregistrement d\'un vrai instrument. Touchez un autre son pour l\'essayer : les curseurs ci-dessous s\'adaptent.'));
+        return c;
+    }
+
+    /* ---------- Forme de la note : la courbe suit les curseurs ---------- */
+    function shapeCard() {
+        const c = card('Forme de la note');
+        const W = 320, H = 64, X0 = 6, Y0 = 58, Y1 = 8;
+        const svg = s('svg', { viewBox: '0 0 ' + W + ' ' + H, class: 'sed-env sed-shape', 'aria-hidden': 'true' });
+        const fill = s('polygon', { class: 'env-fill' }, svg);
+        const off = s('line', { class: 'env-hold' }, svg);
+        const line = s('polyline', { class: 'env-line', fill: 'none' }, svg);
+        const y = (l) => Y0 - l * (Y0 - Y1);
+        views.push(() => {
+            const o = snd().out, syn = snd().syn;
+            const wA = 5 + 70 * Math.sqrt(Lib.attSec(o.att) / 2.4), wR = 6 + 78 * Math.sqrt(Lib.relSec(o.rel) / 4), wH = 70;
+            let wD = 0, lvl = 1;
+            if (syn && syn.sus < 99) { wD = 5 + 56 * Math.sqrt(Lib.decSec(syn.dec) / 3); lvl = syn.sus / 99; }
+            const x1 = X0 + wA, x2 = x1 + wD, x3 = x2 + wH, x4 = x3 + wR;
+            const P = [[X0, y(0)], [x1, y(1)], [x2, y(lvl)], [x3, y(lvl)], [x4, y(0)]].map((p) => p[0].toFixed(1) + ',' + p[1].toFixed(1));
+            line.setAttribute('points', P.join(' '));
+            fill.setAttribute('points', P.join(' ') + ' ' + x4.toFixed(1) + ',' + Y0 + ' ' + X0 + ',' + Y0);
+            off.setAttribute('x1', x3); off.setAttribute('x2', x3); off.setAttribute('y1', Y1 - 4); off.setAttribute('y2', Y0);
+        });
+        c.append(svg, h('p', 'sed-note sed-note-s', 'Le volume d\'une note : il monte (attaque), se tient, puis s\'éteint (relâchement) quand la case se termine — trait pointillé.'),
+            slider('out', 'att'), slider('out', 'rel'));
+        return c;
+    }
+    function fmShapeCard() {
+        const c = card('Forme de la note');
+        c.append(h('p', 'sed-note', 'En synthèse FM, la forme de la note est réglée opérateur par opérateur (enveloppes dans « Réglages avancés »). Les autres curseurs fonctionnent comme d\'habitude.'));
+        return c;
+    }
+
+    function group(title, keys) {
+        const kind = kindOf();
+        const c = card(title);
+        keys.forEach((k) => { if (Lib.applies(kind, k)) c.append(slider('out', k)); });
+        return c.children.length > 1 ? c : null;
+    }
+
+    /* ---------- Réglages avancés ---------- */
+    function synthCard() {
+        const c = card('Synthétiseur');
+        const f = () => snd().syn;
+        c.append(
+            choice('Forme d\'onde', 'La matière du son : la dent de scie est riche, le sinus pur, le carré creux.', Lib.WAVES, () => f().wave, (v) => { f().wave = v; renderAfter(); }),
+            slider('syn', 'pw'),
+            choice('Voix superposées', 'Plusieurs oscillateurs légèrement désaccordés : le son devient large et vivant.', [1, 2, 3, 4, 5].map((n) => [n, String(n)]), () => f().uni, (v) => { f().uni = v; }),
+            slider('syn', 'det'), slider('syn', 'sub'),
+            h('h4', 'sed-sub', 'Filtre'),
+            slider('syn', 'fc'), slider('syn', 'q'), slider('syn', 'fenv'), slider('syn', 'fdec'),
+            h('h4', 'sed-sub', 'Volume de la note'),
+            slider('syn', 'dec'), slider('syn', 'sus')
+        );
+        // le réglage de largeur d'impulsion n'a de sens que pour « Impulsion »
+        const pw = c.querySelectorAll('.sed-sl')[1];
+        views.push(() => { pw.hidden = f().wave !== 'pulse'; });
+        return c;
+    }
+    const renderAfter = () => { touch(); renderPage(); };
+
+    function fineCard() {
+        const kind = kindOf();
+        const c = card('Réglages fins');
+        ['res', 'vrt', 'dtime', 'dfb'].forEach((k) => { if (Lib.applies(kind, k)) c.append(slider('out', k)); });
+        return c;
+    }
+
+    // Éditeur FM complet (le son « Synthé FM »)
+    function fmEditor() {
+        const wrap = h('div', 'sed-fm');
+        wrap.append(h('h3', 'sed-h sed-h-big', 'Synthé FM à 6 opérateurs'),
+            h('p', 'sed-note', 'Choisissez d\'abord un algorithme (la façon dont les 6 opérateurs se modulent), puis réglez chaque opérateur : sa fréquence (ratio), son niveau et son enveloppe. Les curseurs de « Forme » ne servent pas ici : l\'enveloppe est celle de chaque opérateur.'));
+        wrap.append(h('div', 'sed-grid sed-top3', [algoCard(), globalCard(), lfoCard(), pitchEnvCard()]));
         const ops = h('div', 'sed-grid sed-ops');
         for (let i = 0; i < 6; i++) ops.append(opCard(i));
-        body.append(top, ops);
+        wrap.append(ops);
+        return wrap;
     }
-    // Instruments à échantillons : enveloppe d'amplitude simple
-    function pageEnv() {
-        const e = () => snd().env;
-        const c = card('enveloppe de l\'instrument');
-        c.append(h('p', 'sed-note', 'Piano, basse et trompette sont des enregistrements : on règle leur enveloppe (attaque, descente, maintien, relâchement) ' +
-            'et, sur la page « param », le filtre, le delay, l\'accord, le panoramique et le volume.'));
-        const secs = (v) => (v < 0.095 ? Math.round(v * 1000) + ' ms' : v.toFixed(2) + ' s');
-        const mk = (label, i, to) => knob(label, () => e()[i], (v) => { e()[i] = v; }, {
-            min: FM.ENV_RANGE[i][0], max: FM.ENV_RANGE[i][1], step: 0.005, fmt: to || secs,
-            to: (v) => Math.sqrt((v - FM.ENV_RANGE[i][0]) / (FM.ENV_RANGE[i][1] - FM.ENV_RANGE[i][0])),
-            from: (p) => FM.ENV_RANGE[i][0] + p * p * (FM.ENV_RANGE[i][1] - FM.ENV_RANGE[i][0])
-        });
-        const k = h('div', 'sed-knobs', [
-            mk('attaque', 0), mk('descente', 1),
-            knob('maintien', () => e()[2], (v) => { e()[2] = v; }, { min: 0, max: 1, step: 0.01, fmt: (v) => Math.round(v * 100) + ' %' }),
-            mk('relâchement', 3)
-        ]);
-        c.append(k);
-        body.append(h('div', 'sed-grid', [c]));
-    }
-    function pageParam() {
-        const o = () => snd().out;
-        const R = FM.OUT_RANGE;
-        const kn = (label, key, extra) => knob(label, () => o()[key], (v) => { o()[key] = v; }, Object.assign({ min: R[key][0], max: R[key][1] }, extra || {}));
-        const filter = card('filter', 'sed-par');
-        filter.append(h('div', 'sed-knobs', [kn('cutoff', 'cut'), kn('resonance', 'res'), kn('overdrive', 'drv')]));
-        const delay = card('delay', 'sed-par');
-        delay.append(h('div', 'sed-knobs', [kn('time', 'dtime'), kn('feedback', 'dfb'), kn('mix', 'dmix')]),
-            h('p', 'sed-note', 'Le delay se règle en temps réel, sans rapport avec le tempo.'));
-        const ctl = card('controller', 'sed-par');
-        ctl.append(h('div', 'sed-knobs', [
-            kn('master tune', 'tune', { fmt: (v) => (v > 0 ? '+' : '') + v }),
-            kn('pan', 'pan', { fmt: (v) => (v === 64 ? 'C' : v < 64 ? 'L' + (64 - v) : 'R' + (v - 64)) }),
-            kn('volume', 'vol')
-        ]), h('p', 'sed-note', 'Master tune : en centièmes de ton (±99). Ces réglages valent pour tout l\'instrument, dans la mélodie comme au clavier.'));
-        body.append(h('div', 'sed-grid sed-pgrid', [filter, delay, ctl]));
-    }
-    function pageCart() {
-        const c = card('patchs d\'usine');
-        if (!isFm()) {
-            c.append(h('p', 'sed-note', 'Cet instrument est un échantillon : il n\'a pas de patch FM à charger. Choisissez un instrument synthétisé en haut pour parcourir les patchs.'));
-            body.append(h('div', 'sed-grid', [c]));
-            return;
-        }
-        c.append(h('p', 'sed-note', 'Chargez un patch dans « ' + deps.timbres[cur].label + ' » : il remplace le patch actuel (les réglages de la page « param » restent). Vous pouvez ensuite le modifier à votre guise.'));
-        const list = h('div', 'sed-cart');
-        Object.keys(FM.FACTORY).forEach((k) => {
-            const b = h('button', 'sed-cart-b', [h('i', 'sed-dot'), h('span', null, deps.timbres[k].label)]);
-            b.type = 'button';
-            b.firstChild.style.background = deps.timbres[k].color;
-            b.addEventListener('click', () => {
-                undoSnap = FM.clone(snd());
-                snd().fm = FM.clone(FM.FACTORY[k]);
-                touch();
-                renderPage();
-            });
-            list.append(b);
-        });
-        c.append(list);
-        if (undoSnap) {
-            const u = h('button', 'btn-sm', '↶ Annuler le chargement');
-            u.type = 'button';
-            u.addEventListener('click', () => { deps.replace(cur, undoSnap); undoSnap = null; touch(); renderPage(); });
-            c.append(u);
-        }
-        body.append(h('div', 'sed-grid', [c]));
-    }
-    function pageSetup() {
-        const c = card('exporter / importer');
+
+    function toolsCard() {
+        const c = card('Outils');
         const ta = h('textarea', 'sed-ta');
         ta.spellcheck = false;
         ta.setAttribute('aria-label', 'Son de l\'instrument, en texte');
@@ -491,65 +561,86 @@ const SoundEditor = (() => {
             try {
                 const obj = JSON.parse(ta.value);
                 undoSnap = FM.clone(snd());
-                deps.replace(cur, FM.cleanSound(cur, obj));
+                deps.replace(cur, Lib.cleanSound(cur, obj));
                 touch();
                 renderPage();
             } catch (e) { msg.textContent = 'Ce texte n\'est pas un son valide.'; }
         });
         c.append(h('p', 'sed-note', 'Le son de cet instrument en texte : gardez-le dans un fichier pour le retrouver, ou collez ici un son reçu.'), ta, h('div', 'sed-btns', [copy, apply]), msg);
-
-        const c2 = card('copier et remettre à zéro');
-        const target = h('select', 'sed-s');
-        target.setAttribute('aria-label', 'Instrument à écraser');
-        Object.keys(deps.timbres).filter((k) => k !== cur && FM.isFm(k) === isFm()).forEach((k) => { const op = h('option', null, deps.timbres[k].label); op.value = k; target.append(op); });
-        const dup = h('button', 'btn-sm', 'Copier ce son vers →');
-        dup.type = 'button';
-        dup.addEventListener('click', () => {
-            if (!target.value) return;
-            const k = target.value;
-            deps.replace(k, FM.cleanSound(k, FM.clone(snd())));
-            deps.commit(k);
-            msg2.textContent = 'Copié vers « ' + deps.timbres[k].label + ' ».';
-        });
-        const msg2 = h('p', 'sed-note', '');
-        const reset = h('button', 'btn-sm', 'Revenir au son d\'usine de « ' + deps.timbres[cur].label + ' »');
-        reset.type = 'button';
-        reset.addEventListener('click', () => {
-            undoSnap = FM.clone(snd());
-            deps.replace(cur, FM.defaultSound(cur));
-            touch();
-            renderPage();
-        });
-        const init = h('button', 'btn-sm', 'Patch vide (un seul opérateur)');
-        init.type = 'button';
-        init.disabled = !isFm();
-        init.addEventListener('click', () => {
-            undoSnap = FM.clone(snd());
-            snd().fm = FM.initPatch();
-            touch();
-            renderPage();
-        });
-        c2.append(h('div', 'sed-btns', [dup, target]), msg2, h('div', 'sed-btns', [reset, init]));
-        if (undoSnap) {
-            const u = h('button', 'btn-sm', '↶ Annuler');
-            u.type = 'button';
-            u.addEventListener('click', () => { deps.replace(cur, undoSnap); undoSnap = null; touch(); renderPage(); });
-            c2.append(u);
+        if (isFm()) {
+            const init = h('button', 'btn-sm', 'Patch FM vide (un seul opérateur)');
+            init.type = 'button';
+            init.addEventListener('click', () => {
+                undoSnap = FM.clone(snd());
+                snd().fm = FM.initPatch();
+                touch();
+                renderPage();
+            });
+            const fac = h('button', 'btn-sm', 'Patch FM d\'usine de « ' + deps.timbres[cur].label + ' »');
+            fac.type = 'button';
+            fac.addEventListener('click', () => {
+                undoSnap = FM.clone(snd());
+                snd().fm = FM.clone(FM.FACTORY[cur] || FM.initPatch());
+                touch();
+                renderPage();
+            });
+            c.append(h('div', 'sed-btns', [fac, init]));
         }
-        body.append(h('div', 'sed-grid', [c, c2]));
+        return c;
     }
 
-    const PAGES = [['cart', 'cart', pageCart], ['edit', 'edit', pageEdit], ['param', 'param', pageParam], ['setup', 'setup', pageSetup]];
+    function advancedPart() {
+        const kind = kindOf();
+        const det = h('details', 'sed-adv');
+        det.open = advOpen || kind === 'fm';
+        det.addEventListener('toggle', () => { advOpen = det.open; });
+        det.append(h('summary', null, [h('span', null, 'Réglages avancés'),
+            h('small', null, kind === 'synth' ? 'forme d\'onde, voix, filtre, enveloppe, écho…' : kind === 'fm' ? 'algorithme, opérateurs, LFO…' : 'résonance, vitesse du vibrato, écho…')]));
+        const inner = h('div', 'sed-adv-in');
+        const row = h('div', 'sed-grid sed-sl-grid');
+        if (kind === 'synth') row.append(synthCard());
+        row.append(fineCard(), toolsCard());
+        inner.append(row);
+        if (kind === 'fm') inner.append(fmEditor());
+        det.append(inner);
+        return det;
+    }
+
+    /* ---------- Page ---------- */
     function renderPage() {
         views = [];
         body.textContent = '';
         root.style.setProperty('--ic', accent());
-        PAGES.forEach((p) => { if (p[0] === page) p[2](); });
+        const kind = kindOf();
+        body.append(voicesCard());
+        const grid = h('div', 'sed-grid sed-sl-grid');
+        [kind === 'fm' ? fmShapeCard() : shapeCard(), group('Timbre', ['cut', 'drv']), group('Mouvement', ['vib', 'cho']),
+            group('Espace', ['dmix', 'rev']), group('Niveau', ['vol', 'pan', 'tune'])].forEach((c) => c && grid.append(c));
+        body.append(grid, advancedPart());
         views.forEach((f) => f());
-        Array.prototype.forEach.call(tabsRow.querySelectorAll('.sed-tab'), (b) => b.setAttribute('aria-pressed', b.dataset.p === page ? 'true' : 'false'));
         Array.prototype.forEach.call(insRow.children, (b) => b.setAttribute('aria-checked', b.dataset.k === cur ? 'true' : 'false'));
-        nameBtn.textContent = deps.timbres[cur].label;
+        nameEl.textContent = deps.timbres[cur].label + ' · ' + Lib.voice(cur, snd().voice).label;
+        undoBtn.hidden = !undoSnap;
         body.scrollTop = 0;
+    }
+
+    /* ---------- Écouter, remettre à zéro, annuler ---------- */
+    function listen() {
+        const base = deps.baseNote ? deps.baseNote(cur) : 60;
+        [0, 4, 7, 12].forEach((d, i) => deps.audition(base + d, cur, i === 3 ? 1.6 : 0.34, i * 0.3));
+    }
+    function resetSound() {
+        undoSnap = FM.clone(snd());
+        deps.replace(cur, Lib.withVoice(cur, null, snd().voice));
+        touch();
+        renderPage();
+    }
+    function undoLast() {
+        if (!undoSnap) return;
+        deps.replace(cur, undoSnap);
+        undoSnap = null;
+        touch();
+        renderPage();
     }
 
     /* ---------- Clavier d'essai ---------- */
@@ -617,19 +708,26 @@ const SoundEditor = (() => {
         x.addEventListener('click', close);
         top.append(insRow, x);
         body = h('div', 'sed-body');
-        tabsRow = h('div', 'sed-tabs');
-        nameBtn = h('span', 'sed-name');
-        tabsRow.append(nameBtn);
-        PAGES.forEach((p) => {
-            const b = h('button', 'sed-tab', p[1]);
-            b.type = 'button';
-            b.dataset.p = p[0];
-            b.addEventListener('click', () => { page = p[0]; renderPage(); });
-            tabsRow.append(b);
-        });
+        nameEl = h('span', 'sed-name');
+        const play = h('button', 'btn-sm sed-play', [(() => {
+            const i = s('svg', { width: 12, height: 12, viewBox: '0 0 14 14', fill: 'currentColor', 'aria-hidden': 'true' });
+            s('path', { d: 'M3 1.5v11l9-5.5z' }, i);
+            return i;
+        })(), h('span', null, 'Écouter')]);
+        play.type = 'button';
+        play.addEventListener('click', listen);
+        const reset = h('button', 'btn-sm', 'Réglages d\'origine');
+        reset.type = 'button';
+        reset.title = 'Remet tous les réglages du son choisi à leur valeur de départ';
+        reset.addEventListener('click', resetSound);
+        undoBtn = h('button', 'btn-sm', '↶ Annuler');
+        undoBtn.type = 'button';
+        undoBtn.hidden = true;
+        undoBtn.addEventListener('click', undoLast);
+        const foot = h('div', 'sed-foot', [nameEl, play, reset, undoBtn]);
         kbdEl = h('div', 'sed-kbd');
         kbdEl.setAttribute('aria-label', 'Clavier d\'essai');
-        root.append(top, body, tabsRow, kbdEl);
+        root.append(top, body, foot, kbdEl);
         document.body.append(root);
         buildKeyboard();
         bindKeyboard();
@@ -646,7 +744,7 @@ const SoundEditor = (() => {
         document.body.classList.add('sed-open');
         renderPage();
         kbdEl.scrollLeft = Math.max(0, kbdEl.scrollWidth * 0.25);
-        const first = root.querySelector('.sed-tab[aria-pressed="true"]') || root.querySelector('.insp-x');
+        const first = root.querySelector('.sed-voice[aria-checked="true"]') || root.querySelector('.insp-x');
         if (first) first.focus();
     }
     function close() {

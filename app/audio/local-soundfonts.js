@@ -26,7 +26,24 @@ const LOCAL_SOUNDFONT_INSTRUMENTS = [
     ['FluidR3_GM', 'electric_bass_finger'],
     ['MusyngKite', 'trumpet']
 ];
-const LOCAL_SOUNDFONT_FILES = LOCAL_SOUNDFONT_INSTRUMENTS.map(([bank, name]) => localSoundfontUrl(name, bank, 'mp3'));
+
+// Échantillons « maison » (orgue, guitare, cordes, flûte, marimba, cloches…), rendus depuis la banque General MIDI TimGM6mb
+// (licence GPL-2, voir app/licenses/TimGM6mb-GPL2.txt) : une note tous les 3 demi-tons, un fichier par son.
+// Ils sont lus par audio-engine.js (pas par soundfont-player). Cette liste doit rester celle de SoundLib.VOICES
+// (sound-lib.test.js le vérifie). Un fichier n'est téléchargé que si un instrument s'en sert ; le service worker (sw.js)
+// les garde tous en cache pour le mode hors ligne.
+const LOCAL_BANK_DIR = 'app/sounds/Bank';
+const LOCAL_BANK_NAMES = [
+    'organ_drawbar', 'organ_rock', 'organ_church',
+    'guitar_nylon', 'guitar_steel', 'guitar_clean',
+    'strings_ens', 'strings_violin', 'strings_cello', 'strings_pizz',
+    'flute', 'flute_pan', 'flute_rec', 'clarinet', 'oboe',
+    'marimba', 'xylophone', 'vibes', 'celesta',
+    'bells_tubular', 'glockenspiel', 'musicbox', 'choir'
+];
+const LOCAL_BANK_FILES = LOCAL_BANK_NAMES.map((n) => LOCAL_BANK_DIR + '/' + n + '.js');
+
+const LOCAL_SOUNDFONT_FILES = LOCAL_SOUNDFONT_INSTRUMENTS.map(([bank, name]) => localSoundfontUrl(name, bank, 'mp3')).concat(LOCAL_BANK_FILES);
 
 // Page ouverte par double-clic (file://) ? Les navigateurs y interdisent la lecture de fichiers par XMLHttpRequest.
 function isFileProtocol() {
@@ -83,6 +100,9 @@ if (typeof module !== 'undefined' && module.exports) {
     module.exports = {
         LOCAL_SOUNDFONT_DIR,
         LOCAL_SOUNDFONT_INSTRUMENTS,
+        LOCAL_BANK_DIR,
+        LOCAL_BANK_NAMES,
+        LOCAL_BANK_FILES,
         LOCAL_SOUNDFONT_FILES,
         localSoundfontUrl,
         localSoundfontViaScript,
