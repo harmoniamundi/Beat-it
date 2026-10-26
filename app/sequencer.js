@@ -124,9 +124,12 @@ const state = {
     timbre: 'piano',          // instrument des prochaines cases posées
     insOct: {},               // décalage d'octaves de chaque instrument (−3…+3)
     insVol: {},               // niveau de chaque instrument dans le mélange (0–150 %, 100 = niveau d'origine)
+    snd: {},                  // son de chaque instrument : patch FM (ou enveloppe pour les échantillons) + réglages de sortie (éditeur de son)
+    insMute: {},              // instrument coupé dans le mélange (bouton M)
+    insSolo: {},              // instrument écouté seul (bouton S) ; plusieurs solos s'additionnent
     ext: {}, len: {}, dir: {}
 };
-Object.keys(SeqAudio.TIMBRES).forEach(k => { state.insOct[k] = SeqAudio.TIMBRES[k].shift; state.insVol[k] = 100; });
+Object.keys(SeqAudio.TIMBRES).forEach(k => { state.insOct[k] = SeqAudio.TIMBRES[k].shift; state.insVol[k] = 100; state.insMute[k] = false; state.insSolo[k] = false; state.snd[k] = FMSynth.defaultSound(k); });
 DRUMS.forEach(d => { state.mute[d.id] = false; state.solo[d.id] = false; state.vol[d.id] = 80; });
 LANES.forEach(id => { state.ext[id] = {}; state.len[id] = 0; state.dir[id] = 'fwd'; });
 
@@ -174,6 +177,10 @@ function load() {
         if (s.insVol && typeof s.insVol === 'object') {
             Object.keys(state.insVol).forEach(k => { if (Number.isFinite(s.insVol[k])) state.insVol[k] = clamp(Math.round(s.insVol[k]), 0, 150); });
         }
+        if (s.snd && typeof s.snd === 'object') Object.keys(state.snd).forEach(k => { state.snd[k] = FMSynth.cleanSound(k, s.snd[k]); });
+        ['insMute', 'insSolo'].forEach(f => {
+            if (s[f] && typeof s[f] === 'object') Object.keys(state[f]).forEach(k => { state[f][k] = !!s[f][k]; });
+        });
         if (Array.isArray(s.mel)) {
             // Les anciennes sauvegardes notent 1 pour une case allumée : elle prend l'instrument alors choisi (state.timbre).
             // Elles n'ont qu'une grille (degré × pas) : elle devient la couche 0.
@@ -274,6 +281,21 @@ function playDrumHit(dr, e, when, d) {
     }
 }
 
+// Mute / solo des instruments de la mélodie. Seuls les instruments affichés dans le mélangeur comptent pour le solo :
+// un solo laissé sur un instrument qui n'a plus aucune note ne rend donc pas le reste muet sans qu'on puisse le défaire.
+let mixKeys = [];
+const anyInsSolo = () => mixKeys.some(k => state.insSolo[k]);
+const insAudible = k => !state.insMute[k] && (!anyInsSolo() || !!state.insSolo[k]);
+function refreshInsAudible() {
+    Object.keys(SeqAudio.TIMBRES).forEach(k => SeqAudio.setInstrumentAudible(k, insAudible(k)));
+    insMixEl.querySelectorAll('.ins-row').forEach(row => {
+        const k = row.dataset.ins;
+        row.querySelector('.ms.m').setAttribute('aria-pressed', state.insMute[k] ? 'true' : 'false');
+        row.querySelector('.ms.s').setAttribute('aria-pressed', state.insSolo[k] ? 'true' : 'false');
+        row.classList.toggle('silent', !insAudible(k));
+    });
+}
+
 const insGain = ins => (state.insVol[ins] == null ? 100 : state.insVol[ins]) / 100;     // niveau de l'instrument dans le mélange
 
 // L'instrument `ins` joue-t-il sur le degré r au pas i (sur n'importe quelle couche) ?
@@ -287,7 +309,7 @@ function playMelodyStep(s, L, e, when, d) {
     for (let r = 0; r < rowsInfo.length; r++) {
         for (let l = 0; l < LAYERS; l++) {
             const ins = state.mel[l][r][s];
-            if (!ins) continue;
+            if (!ins || !insAudible(ins)) continue;     // instrument coupé (M) ou hors solo (S)
             if (state.mel.some((grid, q) => q < l && grid[r][s] === ins)) continue;     // même instrument déjà joué sur ce degré et ce pas
             let len = 1;
             if (hold) {
@@ -301,7 +323,7 @@ function playMelodyStep(s, L, e, when, d) {
             for (let k = 0; k < rat; k++) {
                 const part = span / rat;
                 SeqAudio.playNote(midi, when + k * part, Math.max(0.05, part * (rat > 1 ? 0.8 : (len > 1 ? 0.98 : 0.86))),
-                    0.9 * vol * insGain(ins) * (k === 0 ? 1 : 0.85), fx, ins);
+                    0.9 * vol * (k === 0 ? 1 : 0.85), fx, ins, insGain(ins));
             }
             any = true;
         }
@@ -674,7 +696,7 @@ function auditionDrum(ti) {
 function auditionNote(r, ins) {
     if (!SeqAudio.init() || !rowsInfo[r]) return;
     const k = ins || state.timbre;
-    SeqAudio.playNote(clamp(rowsInfo[r].midi + 12 * (state.insOct[k] || 0), 21, 108), SeqAudio.now() + 0.01, 0.6, 0.9 * insGain(k), null, k);
+    SeqAudio.playNote(clamp(rowsInfo[r].midi + 12 * (state.insOct[k] || 0), 21, 108), SeqAudio.now() + 0.01, 0.6, 0.9, null, k, insGain(k));
 }
 
 /* ---------- Affichage des réglages ---------- */
@@ -1345,6 +1367,7 @@ function usedInstruments() {
 }
 function renderMixer() {
     const keys = usedInstruments(), sig = keys.join(',');
+    mixKeys = keys;
     if (sig === mixSig) return;
     mixSig = sig;
     insMixEl.textContent = '';
@@ -1360,10 +1383,26 @@ function renderMixer() {
         inp.setAttribute('aria-label', 'Niveau : ' + def.label);
         paintRange(inp);
         const out = el('output', null, String(state.insVol[k]));
-        row.append(name, inp, out);
+        const m = el('button', 'ms m', 'M');
+        m.type = 'button'; m.title = 'Couper l’instrument';
+        m.setAttribute('aria-label', 'Couper : ' + def.label);
+        const so = el('button', 'ms s', 'S');
+        so.type = 'button'; so.title = 'Écouter l’instrument seul';
+        so.setAttribute('aria-label', 'Solo : ' + def.label);
+        row.append(name, inp, out, m, so);
         insMixEl.append(row);
     });
+    refreshInsAudible();
 }
+insMixEl.addEventListener('click', e => {
+    const b = e.target.closest('.ms');
+    const row = b && b.closest('.ins-row');
+    if (!row) return;
+    const f = b.classList.contains('m') ? 'insMute' : 'insSolo', k = row.dataset.ins;
+    state[f][k] = !state[f][k];
+    refreshInsAudible();
+    save();
+});
 insMixEl.addEventListener('input', e => {
     const row = e.target.closest('.ins-row');
     if (!row || !e.target.matches('input')) return;
@@ -1393,6 +1432,25 @@ function shiftInstrumentOctave(d) {
     save();
     if (!playing) auditionNote(0);
 }
+// Éditeur de son : patch FM de l'instrument, filtre, delay… (voir editor.js)
+SoundEditor.init({
+    timbres: SeqAudio.TIMBRES,
+    getSound: k => state.snd[k],
+    commit: k => { SeqAudio.setSound(k, state.snd[k]); save(); },
+    replace: (k, s) => { state.snd[k] = s; SeqAudio.setSound(k, s); save(); },
+    audition: (midi, k) => {
+        if (!SeqAudio.init()) return;
+        SeqAudio.want([k]);
+        SeqAudio.playNote(midi, SeqAudio.now() + 0.01, 0.7, 0.9, null, k, 1);
+    },
+    isPlaying: () => playing,
+    select: k => { if (k !== state.timbre) setInstrument(k); }
+});
+$('insEdit').addEventListener('click', () => SoundEditor.open(state.timbre));
+insMixEl.addEventListener('click', e => {                   // clic sur le nom d'un instrument du mélange : son éditeur
+    const n = e.target.closest('.ins-name'), row = n && n.closest('.ins-row');
+    if (row) SoundEditor.open(row.dataset.ins);
+});
 buildPalette();
 palEl.addEventListener('click', e => {
     const b = e.target.closest('.ins');
@@ -1530,6 +1588,7 @@ SeqAudio.onStatus(text => {
 /* ---------- Démarrage ---------- */
 load();
 refreshRows();
+Object.keys(state.snd).forEach(k => SeqAudio.setSound(k, state.snd[k]));
 SeqAudio.setDrumVolume(state.drumVol / 100);
 SeqAudio.setMelodyVolume(state.melVol / 100);
 DRUMS.forEach(d => SeqAudio.setTrackVolume(d.id, state.vol[d.id] / 100));

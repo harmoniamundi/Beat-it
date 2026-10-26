@@ -67,10 +67,36 @@ on peut donc mélanger (une ligne de basse, un accord d'orgue, une mélodie de f
 - « Octave » (à droite de la palette) décale tout un instrument de −3 à +3 octaves sans toucher à la grille
   (la basse est proposée 2 octaves plus bas, comme son registre naturel).
 - 15 instruments : Piano, Basse et Trompette (échantillons) ; Orgue, Guitare, Cordes, Basse synthé, Flûte,
-  Clarinette, Marimba, Vibraphone, Carillon, Synthé, Chiptune et Nappe (synthétisés dans le navigateur : rien à télécharger, utilisables hors ligne).
+  Clarinette, Marimba, Vibraphone, Carillon, Synthé, Chiptune et Nappe (synthèse FM à 6 opérateurs calculée dans le navigateur : rien à télécharger, utilisables hors ligne, et **éditables**, voir plus bas).
 - **Mélange** : dans la colonne de gauche, sous « Volumes », un curseur par instrument qui joue dans la mélodie (plus celui de la palette, pour le régler avant de poser des cases), à la couleur de l'instrument. De 0 à 150 % ; 100 = niveau d'origine. Le curseur « Mélodie » reste le niveau général de l'ensemble. Relâcher un curseur fait entendre l'instrument à son nouveau niveau ; les niveaux sont enregistrés avec le reste.
+  Chaque instrument a aussi ses boutons **M** (couper) et **S** (l'écouter seul), comme les pistes de batterie : plusieurs solos s'additionnent, la ligne d'un instrument coupé ou hors solo s'estompe, et le son déjà parti (une nappe tenue) s'arrête aussitôt. Le solo ne concerne que les instruments de la mélodie, pas la batterie. Un solo laissé sur un instrument qui n'a plus aucune note est ignoré. Coupures et solos sont enregistrés avec le reste.
 - Les anciennes sauvegardes sont reprises : leurs cases prennent l'instrument qui était alors choisi (elles forment la ligne principale).
 - « Au hasard », « Générer » et « Vider » remplacent toute la mélodie, couches comprises.
+
+## Éditeur de son (façon synthé FM à 6 opérateurs)
+
+Bouton **Éditer le son** (au-dessus de la palette d'instruments), ou clic sur le nom d'un instrument dans le mélangeur. Une fenêtre s'ouvre,
+avec en haut la liste des instruments (on peut en changer sans la fermer), en bas les quatre onglets du synthé et un clavier d'essai.
+Chaque réglage fait entendre le résultat un instant après ; pendant la lecture, il s'applique aux notes suivantes.
+
+- **edit** (instruments synthétisés) : l'écran d'un DX7.
+  - *Algorithme* (1 à 32, flèches ‹ ›) : le schéma montre quels opérateurs en modulent d'autres (en bas : ceux qu'on entend ; trait pointillé : retour / feedback).
+  - *OP1 à OP6* : cliquer sur « OPn » l'allume ou l'éteint ; les barres montrent son niveau. Enveloppe à 4 vitesses (R1–R4) et 4 niveaux (L1–L4), qu'on règle
+    en tapant les nombres ou en **tirant les points de la courbe** (haut-bas : niveau ; gauche-droite : vitesse) ; la partie en pointillé est le maintien tant que la note dure.
+    *Frequency* : rapport (« f×1.0-3 » = coarse 1, fine 3) ou fréquence fixe en Hz, plus detune. *KBD scale* : le niveau change de part et d'autre d'un point de rupture
+    (courbes −lin, −exp, +exp, +lin, profondeurs gauche et droite) et « rate » accélère les enveloppes dans l'aigu. *M sens* : sensibilité au LFO d'amplitude ;
+    *V sens* : sensibilité à la force de la note (les notes de faible probabilité, les répétitions d'un ratchet et le verrou « volume » sonnent moins fort et moins brillant) ; *level* : niveau de sortie.
+  - *Feedback*, *do du milieu* (transposition du patch), *osc key sync* (les opérateurs repartent de zéro à chaque note).
+  - *LFO* (forme, vitesse, délai, PMD / AMD profondeur de vibrato / de trémolo, PMS sensibilité au vibrato) et *enveloppe de hauteur* (50 = hauteur normale).
+  - Astuce : sur un champ, on peut **faire glisser l'étiquette** vers le haut ou le bas pour changer la valeur (Maj = plus vite) ; la molette marche aussi.
+- **edit** (piano, basse, trompette) : ce sont des enregistrements ; on règle seulement leur enveloppe (attaque, descente, maintien, relâchement).
+- **param** (tous les instruments) : *filter* (fréquence de coupure, résonance, saturation), *delay* (temps, feedback, mélange), *controller* (accord en centièmes de ton, panoramique, volume).
+  Boutons rotatifs : glisser de haut en bas (Maj = fin), molette ou flèches du clavier.
+- **cart** : les 12 patchs d'usine ; en charger un le met à la place du patch de l'instrument (bouton « Annuler le chargement »).
+- **setup** : le son de l'instrument en texte (à copier pour le garder, ou à coller pour en charger un reçu), copie vers un autre instrument, retour au son d'usine, patch vide.
+
+Les sons sont enregistrés avec le reste, dans le navigateur. Pas de pitch bend, de molette de modulation ni de mode mono / portamento : un séquenceur n'en a pas besoin.
+Les 32 algorithmes sont ceux du DX7, redessinés de mémoire à partir de leur schéma ; un schéma (surtout parmi les n° 7 à 18) pourrait différer d'un détail de l'original.
 
 ## Styles de batterie et mélodie « au hasard »
 
@@ -120,12 +146,14 @@ sw.js                   mémoire hors ligne (doit rester à côté de index.html
 manifest.webmanifest    installation sur l'écran d'accueil
 app/
   sequencer.js          la grille, la lecture, les réglages
-  audio-engine.js       le son (batterie synthétisée + instruments échantillonnés) et la liste des instruments (TIMBRES)
+  audio-engine.js       le son (batterie synthétisée, échantillons, notes FM) et la liste des instruments (TIMBRES)
+  editor.js             l'éditeur de son (fenêtre « Éditer le son »)
   theory.js             gammes et noms de notes (+ theory.test.js : « node app/theory.test.js »)
   style.css             la mise en forme
   offline.js            enregistrement du mode hors ligne
   keepalive.js          iPhone : son en mode silencieux, écran toujours allumé
-  audio/                synthés de batterie, instruments synthétisés (synth-voices.js), chargement local des sons
+  audio/                synthés de batterie, moteur FM et patchs d'usine (fm-synth.js, avec fm-synth.test.js : « node app/fm-synth.test.js »),
+                        voix de secours (synth-voices.js), chargement local des sons
   sounds/               piano, trompette, basse électrique (environ 8 Mo)
   vendor/, fonts/, icons/, licenses/
 ```
@@ -134,7 +162,9 @@ Si vous ajoutez ou enlevez un fichier, mettez à jour la liste `SHELL_FILES` dan
 
 ### Ajouter un instrument
 
-- **Synthétisé** : écrire sa voix dans `app/audio/synth-voices.js` (et son niveau dans `LEVEL`), puis une ligne dans `TIMBRES` de `app/audio/audio-engine.js` (nom, couleur, décalage d'octaves).
+- **Synthétisé (FM)** : écrire son patch d'usine dans `app/audio/fm-synth.js` (un appel `def('identifiant', algorithme, feedback, [opérateurs], { LFO… })`,
+  son niveau dans `TRIM`), puis une ligne dans `TIMBRES` de `app/audio-engine.js` (nom, couleur, décalage d'octaves). Le plus simple : le construire dans l'éditeur,
+  copier son texte (onglet « setup ») et le recopier dans `fm-synth.js`.
 - **À échantillons** : copier son fichier (ex. `violin-mp3.js` de la banque FluidR3_GM, projet MIDI.js Soundfonts) dans `app/sounds/FluidR3_GM/`,
   l'ajouter à `LOCAL_SOUNDFONT_INSTRUMENTS` (`app/audio/local-soundfonts.js`), puis une ligne dans `TIMBRES` avec `sf` et `bank`.
 

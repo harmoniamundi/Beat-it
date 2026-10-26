@@ -31,10 +31,12 @@ const SHELL_FILES = [
     'app/audio/local-soundfonts.js',
     'app/audio/drum-synths.js',
     'app/audio/synth-voices.js',
+    'app/audio/fm-synth.js',
     'app/offline.js',
     'app/keepalive.js',
     'app/theory.js',
     'app/audio-engine.js',
+    'app/editor.js',
     'app/sequencer.js'
 ];
 

@@ -3,12 +3,14 @@
 //  - Mélodie : chaque note peut avoir son instrument. Piano, trompette et basse sont des échantillons (soundfont-player,
 //    lus depuis app/sounds/, voir audio/local-soundfonts.js) ; les autres sont synthétisés (audio/synth-voices.js).
 //    Le synthé joue aussi de secours tant qu'un échantillon charge ou si son fichier est introuvable.
-// Chargé après soundfont-player, local-soundfonts.js, drum-synths.js et synth-voices.js. Aucun accès au DOM.
+// Les 12 instruments synthétisés sont des patchs FM à 6 opérateurs (audio/fm-synth.js) calculés note par note puis rejoués
+// comme de petits échantillons. Chaque instrument a sa chaîne de sortie réglable : saturation, filtre, delay, panoramique, volume.
+// Chargé après soundfont-player, local-soundfonts.js, drum-synths.js, synth-voices.js et fm-synth.js. Aucun accès au DOM.
 
 const SeqAudio = (() => {
     // Instruments de la mélodie, dans l'ordre où on les propose.
     //   label : nom affiché · color : couleur des cases · shift : décalage d'octaves proposé au départ
-    //   sf / bank : échantillon (soundfont-player) ; sans `sf`, l'instrument est synthétisé (voix du même nom dans synth-voices.js)
+    //   sf / bank : échantillon (soundfont-player) ; sans `sf`, l'instrument est un patch FM (FMSynth.FACTORY, fm-synth.js)
     const TIMBRES = {
         piano:     { label: 'Piano',          color: '#e2e8f0', shift: 0,  sf: 'acoustic_grand_piano', bank: 'FluidR3_GM' },
         organ:     { label: 'Orgue',          color: '#f97316', shift: 0 },
@@ -27,8 +29,13 @@ const SeqAudio = (() => {
         pad:       { label: 'Nappe',          color: '#94a3b8', shift: 0 }
     };
 
+    const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
     let ctx = null, master, comp, drumBus, melBus, reverbIn, noiseBuf, satCurve, rt;
-    const trackGain = {}, nodes = [], players = {};
+    const trackGain = {}, nodes = [], players = {}, ins = {}, insOn = {};
+    const sounds = {}, rev = {};                      // son (patch FM ou enveloppe, réglages de sortie) et numéro de version de chaque instrument
+    const fmCache = new Map();                        // notes FM déjà calculées : clé → tampon (le plus ancien en tête)
+    let fmCacheSize = 0;
+    const FM_CACHE_MAX = 9e6;                         // échantillons gardés en mémoire (≈ 36 Mo)
     const vols = { track: {}, drum: 0.8, mel: 0.7 };
     let lastOpen = null, timbre = 'piano', voices = {}, statusFn = () => {};
     const wanted = new Set(['piano']);       // instruments à échantillons dont la page a besoin (chargés dès que le son démarre)
@@ -152,6 +159,98 @@ const SeqAudio = (() => {
     }
 
     /* ---------- Mélodie ---------- */
+    // Chaque instrument passe par sa propre chaîne avant la mélodie :
+    //   entrée (couper / isoler : M et S coupent aussi les notes déjà parties, comme une nappe tenue)
+    //   → saturation → filtre passe-bas → panoramique → volume → mélodie, plus un delay (filtre → delay → panoramique).
+    function insChain(k) {
+        let c = ins[k];
+        if (c) return c;
+        c = ins[k] = {};
+        c.inp = ctx.createGain();
+        c.inp.gain.value = insOn[k] === false ? 0 : 1;
+        c.pre = ctx.createGain(); c.pre.gain.value = 4;
+        c.shaper = ctx.createWaveShaper();
+        c.post = ctx.createGain(); c.post.gain.value = 0.25;
+        c.lp = ctx.createBiquadFilter(); c.lp.type = 'lowpass';
+        c.pan = ctx.createStereoPanner ? ctx.createStereoPanner() : null;
+        c.vol = ctx.createGain();
+        c.dly = ctx.createDelay(1.5);
+        c.fb = ctx.createGain();
+        c.wet = ctx.createGain();
+        const tail = c.pan || c.vol;
+        c.inp.connect(c.pre); c.pre.connect(c.shaper); c.shaper.connect(c.post); c.post.connect(c.lp);
+        c.lp.connect(tail);
+        c.lp.connect(c.dly); c.dly.connect(c.wet); c.wet.connect(tail);
+        c.dly.connect(c.fb); c.fb.connect(c.dly);
+        if (c.pan) c.pan.connect(c.vol);
+        c.vol.connect(melBus);
+        applyOut(k, true);
+        return c;
+    }
+    const insNode = (k) => insChain(k).inp;
+    function setInstrumentAudible(k, on) {
+        insOn[k] = !!on;
+        if (ins[k]) ins[k].inp.gain.setTargetAtTime(on ? 1 : 0, ctx.currentTime, 0.01);
+    }
+
+    // Courbe de saturation : tanh dont la raideur croît avec le réglage (0 = aucune)
+    function driveCurve(d) {
+        if (!d) return null;
+        const g = 1 + d * 0.12, n = 1024, cv = new Float32Array(n), norm = Math.tanh(g);
+        for (let i = 0; i < n; i++) { const x = i / (n - 1) * 2 - 1; cv[i] = Math.tanh(g * x) / norm; }
+        return cv;
+    }
+    // Réglages de sortie d'un instrument (page « param » de l'éditeur) : cut 0–127, res 0–99, drv 0–99,
+    // dtime / dfb / dmix 0–99, tune −99…99 (centièmes de ton), pan 0–127 (64 = centre), vol 0–127
+    function applyOut(k, now) {
+        const c = ins[k], o = (sounds[k] && sounds[k].out) || FMSynth.initOut();
+        if (!c) return;
+        const t = ctx.currentTime, tc = now ? 0 : 0.015;
+        const set = (param, v) => { if (now) param.value = v; else param.setTargetAtTime(v, t, tc); };
+        if (c.driveSet !== o.drv) { c.shaper.curve = driveCurve(o.drv); c.driveSet = o.drv; }
+        set(c.post.gain, 0.25 / (1 + o.drv / 99 * 1.5));                 // la saturation gonfle le niveau : on le compense
+        set(c.lp.frequency, o.cut >= 127 ? 20000 : 30 * Math.pow(20000 / 30, o.cut / 127));
+        set(c.lp.Q, o.res / 99 * 18);
+        set(c.dly.delayTime, 0.02 + 0.88 * Math.pow(o.dtime / 99, 1.5));
+        set(c.fb.gain, o.dfb / 99 * 0.92);
+        set(c.wet.gain, o.dmix / 99);
+        if (c.pan) set(c.pan.pan, clamp((o.pan - 64) / 64, -1, 1));
+        set(c.vol.gain, Math.pow(o.vol / 127, 2));
+    }
+
+    // Son d'un instrument : { fm : patch, out : réglages de sortie } ou { env : [attaque, descente, maintien, relâchement], out }
+    function setSound(k, s) {
+        if (!TIMBRES[k] || !s) return;
+        sounds[k] = s;
+        rev[k] = (rev[k] || 0) + 1;
+        for (const key of Array.from(fmCache.keys())) {
+            if (key.indexOf(k + '|') === 0) { fmCacheSize -= fmCache.get(key).length; fmCache.delete(key); }
+        }
+        if (ctx) applyOut(k, false);
+    }
+
+    // Note FM : calculée une fois par (instrument, version du patch, hauteur, durée, force), puis gardée.
+    function fmBuffer(k, midi, dur, vel) {
+        const patch = sounds[k] && sounds[k].fm;
+        if (!patch) return null;
+        const sens = patch.ops.some((o) => o.on && o.kvs > 0);
+        const v = sens ? Math.round(clamp(vel / 0.9, 0.05, 1) * 8) / 8 : 1;
+        const d = Math.round(clamp(dur, 0.02, 10) * 100) / 100;
+        const key = k + '|' + rev[k] + '|' + midi + '|' + d + '|' + v + '|' + ctx.sampleRate;
+        let buf = fmCache.get(key);
+        if (buf) { fmCache.delete(key); fmCache.set(key, buf); return buf; }
+        const data = FMSynth.render(patch, midi, d, v, ctx.sampleRate);
+        buf = ctx.createBuffer(1, data.length, ctx.sampleRate);
+        if (buf.copyToChannel) buf.copyToChannel(data, 0); else buf.getChannelData(0).set(data);
+        fmCache.set(key, buf);
+        fmCacheSize += buf.length;
+        for (const old of fmCache.keys()) {            // on rend de la place en retirant les plus anciennes
+            if (fmCacheSize <= FM_CACHE_MAX) break;
+            fmCacheSize -= fmCache.get(old).length; fmCache.delete(old);
+        }
+        return buf;
+    }
+
     // Pastille d'état : ce qui charge encore, ou ce qui manque (le synthé joue alors à la place).
     function refreshStatus() {
         const names = (state) => Object.keys(players).filter((k) => wanted.has(k) && players[k].state === state).map((k) => TIMBRES[k].label);
@@ -190,21 +289,38 @@ const SeqAudio = (() => {
     }
 
     // fx : verrous du pas (voir fxInput), ou rien · key : instrument de la note (sinon l'instrument par défaut)
-    function playNote(midi, when, dur, vel, fx, key) {
+    // vel : force de la note (0,9 = normale) · trim : niveau de l'instrument dans le mélange (1 = d'origine)
+    function playNote(midi, when, dur, vel, fx, key, trim) {
         if (!ctx) return;
         const k = TIMBRES[key] ? key : timbre, def = TIMBRES[k];
-        const out = fx ? fxInput(melBus, fx) : melBus;
+        const bus = insNode(k), out = fx ? fxInput(bus, fx) : bus;
+        const tr = trim == null ? 1 : trim, snd = sounds[k] || {}, tune = (snd.out && snd.out.tune) || 0;
         if (def.sf) {
             const p = players[k];
             if (p && p.state === 'ready') {
-                try { p.inst.play(Theory.midiName(midi), when, { duration: dur, gain: vel, destination: out }); prune(); return; }
+                const o = { duration: dur, gain: vel * tr, destination: out };
+                if (tune) o.cents = tune;
+                if (snd.env && (snd.env[0] || snd.env[1] || snd.env[2] < 1 || snd.env[3])) o.adsr = snd.env;
+                try { p.inst.play(Theory.midiName(midi), when, o); prune(); return; }
                 catch (e) { /* on retombe sur le synthé */ }
             } else if (!p || p.state === 'idle') {
                 want([k]);
             }
-            voices.synth(midi, when, dur, vel, out);                 // en attendant l'échantillon (ou s'il manque)
+            voices.synth(midi, when, dur, vel * tr, out);            // en attendant l'échantillon (ou s'il manque)
         } else {
-            (voices[k] || voices.synth)(midi, when, dur, vel, out);
+            let buf = null;
+            try { buf = fmBuffer(k, midi, dur, vel); } catch (e) { buf = null; }
+            if (buf) {
+                const src = ctx.createBufferSource(), g = ctx.createGain();
+                src.buffer = buf;
+                if (tune) src.detune.value = tune;
+                g.gain.value = vel * tr;
+                src.connect(g); g.connect(out);
+                src.start(when);
+                nodes.push(src);
+            } else {
+                voices.synth(midi, when, dur, vel * tr, out);
+            }
         }
         prune();
     }
@@ -233,7 +349,7 @@ const SeqAudio = (() => {
     }
 
     return {
-        TIMBRES, init, now, get, playDrum, playNote, setTimbre, want, setTrackVolume, setDrumVolume, setMelodyVolume, stopAll,
+        TIMBRES, init, now, get, playDrum, playNote, setTimbre, want, setInstrumentAudible, setSound, setTrackVolume, setDrumVolume, setMelodyVolume, stopAll,
         onStatus(fn) { statusFn = fn || (() => {}); }
     };
 })();
