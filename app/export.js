@@ -142,7 +142,7 @@ const Exporter = (() => {
         await eng.whenLoaded();
         evs.forEach(e => {
             if (e.k === 'd') eng.playDrum(e.track, e.drum, e.when, e.vel, e.fx);
-            else eng.playNote(e.midi, e.when, e.dur, e.vel, e.fx, e.key, e.trim);
+            else eng.playNote(e.midi, e.when, e.dur, e.vel, e.fx, e.key, e.trim, e.legato);
         });
         const out = await ctx.startRendering();
         const l = out.getChannelData(0), r = out.getChannelData(out.numberOfChannels > 1 ? 1 : 0);

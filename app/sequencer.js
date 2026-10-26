@@ -154,6 +154,8 @@ function freshState() {
         cur: 0,
         songOn: false, song: [],                               // chanson : suite de { p : pattern, r : nombre de mesures }
         hum: { t: 0, v: 0 },                                   // humanisation : écart de placement et de force (0–100)
+        same: 'hold',                                          // cases voisines d'un même instrument : 'hold' = une note tenue, 'repeat' = une note par case
+        tie: true,                                             // notes tenues reliées d'une boucle à la suivante (fin de boucle → début)
         root: 'C', scale: 'pentMin', octave: 4, range: 1,
         timbre: 'piano',          // instrument des prochaines cases posées
         insOct: {},               // décalage d'octaves de chaque instrument (−3…+3)
@@ -222,6 +224,8 @@ function parseInto(s) {
         parsePattern(s, state.pats[0]);         // anciennes sauvegardes : un seul motif, qui devient le pattern A
     }
     state.songOn = !!s.songOn;
+    state.tie = s.tie !== false;
+    state.same = s.same === 'repeat' ? 'repeat' : 'hold';
     if (Array.isArray(s.song)) {
         state.song = s.song.slice(0, SONG_MAX)
             .filter(e => e && Number.isFinite(e.p) && e.p >= 0 && e.p < NPAT)
@@ -336,6 +340,10 @@ function fxOf(e) {
 // Humanisation : petit écart aléatoire de placement (en secondes) et de force (facteur), selon les curseurs de la colonne de gauche
 // AU : le moteur son qui reçoit les coups : celui de l'appli, ou, pendant un export, un enregistreur (voir recordEvents).
 let AU = SeqAudio, humOn = true;
+// Métronome : réglage de l'outil (pas du morceau) : gardé à part, hors projets et hors historique
+const CLICK_KEY = 'sequenceur-clic-v1';
+let clickOn = false, countIn = false;
+try { const c = JSON.parse(localStorage.getItem(CLICK_KEY)); clickOn = !!(c && c.on); countIn = !!(c && c.count); } catch (e) { /* ignoré */ }
 const humTime = () => humOn && state.hum.t ? (Math.random() * 2 - 1) * HUM_TIME * state.hum.t / 100 : 0;
 const humVel = () => humOn && state.hum.v ? 1 + (Math.random() * 2 - 1) * HUM_VEL * state.hum.v / 100 : 1;
 // Un son ne part jamais dans le passé : un décalage vers l'avant est limité par l'horloge audio
@@ -370,9 +378,18 @@ const insGain = ins => (state.insVol[ins] == null ? 100 : state.insVol[ins]) / 1
 // L'instrument `ins` joue-t-il sur le degré r au pas i (sur n'importe quelle couche) ?
 const stackHas = (r, i, ins, p) => pat_(p).mel.some(grid => grid[r][i] === ins);
 
+// Notes tenues d'une boucle à la suivante : si des cases d'un même instrument touchent la fin de la boucle ET commencent
+// la suivante, la note de fin de boucle est prolongée sur le début, et le début n'est pas rejoué (un seul son continu).
+// Quand toute la boucle est tenue, on ne peut pas prolonger sans fin : chaque tour recommence la note, avec un léger recouvrement
+// et une attaque courte (« legato »), ce qui raccorde sans trou.
+// wrapCarry : degré|instrument → jusqu'à quand la note déjà partie couvre (en secondes de l'horloge qui joue, voir recordEvents).
+let wrapCarry = {};
+const WRAP_OVERLAP = 0.05;
+
 // Notes de la mélodie jouées au pas `s` ; renvoie vrai si au moins une note part.
-function playMelodyStep(s, L, e, when, d, p) {
-    const dir = p.dir[MEL], hold = dir === 'fwd' || dir === 'bwd', sgn = dir === 'bwd' ? -1 : 1;
+// left : nombre de pas qu'il reste avant de quitter le pattern en mode Chanson (rien ailleurs : la boucle revient toujours).
+function playMelodyStep(s, L, e, when, d, p, left) {
+    const dir = p.dir[MEL], hold = (dir === 'fwd' || dir === 'bwd') && state.same !== 'repeat', sgn = dir === 'bwd' ? -1 : 1;
     const rat = (e && e.rat) || 1, vol = e && e.vol != null ? e.vol / 100 : 1, fx = fxOf(e), shift = 12 * ((e && e.oct) || 0);
     let any = false;
     const t0 = when + (p.off[MEL] || 0) / 100 * d + humTime();      // un seul écart pour toutes les notes du pas : l'accord reste groupé
@@ -382,19 +399,33 @@ function playMelodyStep(s, L, e, when, d, p) {
             const ins = p.mel[l][r][s];
             if (!ins || !insAudible(ins)) continue;     // instrument coupé (M) ou hors solo (S)
             if (p.mel.some((grid, q) => q < l && grid[r][s] === ins)) continue;     // même instrument déjà joué sur ce degré et ce pas
-            let len = 1;
+            let len = 1, legato = false, extra = 0;
             if (hold) {
                 // des cases voisines d'un même instrument ne font qu'une note tenue (quelle que soit la couche qui les porte) ;
                 // un autre instrument en commence une nouvelle
-                const prev = s - sgn;
+                const prev = s - sgn, first = sgn > 0 ? 0 : L - 1, last = sgn > 0 ? L - 1 : 0, key = r + '|' + ins;
                 if (prev >= 0 && prev < L && stackHas(r, prev, ins, p)) continue;     // suite d'une note tenue : déjà jouée
+                if (state.tie && s === first && L > 1 && stackHas(r, last, ins, p)) {   // début de boucle, juste après une note qui touchait la fin
+                    const c = wrapCarry[key];
+                    if (c && !c.full && c.until > when - 1e-6) continue;                 // elle a déjà été prolongée jusqu'ici : un seul son continu
+                    if (c && c.full && Math.abs(when - c.until) < d) legato = true;
+                }
                 while (s + sgn * len >= 0 && s + sgn * len < L && stackHas(r, s + sgn * len, ins, p)) len++;
+                if (state.tie && L > 1 && s + sgn * (len - 1) === last && (left == null || len < left)) {   // la note touche la fin de la boucle
+                    if (len >= L) { extra = WRAP_OVERLAP; wrapCarry[key] = { until: when + len * d, full: true }; }
+                    else if (stackHas(r, first, ins, p)) {
+                        let h = 0;
+                        while (h < L - len && stackHas(r, first + sgn * h, ins, p)) h++;
+                        len += h;
+                        wrapCarry[key] = { until: when + len * d, full: false };
+                    }
+                }
             }
             const span = len * d, midi = clamp(rowsInfo[r].midi + 12 * (state.insOct[ins] || 0) + shift, 21, 108);
             for (let k = 0; k < rat; k++) {
                 const part = span / rat;
-                AU.playNote(midi, safeWhen(t0 + k * part), Math.max(0.05, part * (rat > 1 ? 0.8 : (len > 1 ? 0.98 : 0.86))),
-                    Math.min(1.1, 0.9 * vol * hv * (k === 0 ? 1 : 0.85)), fx, ins, insGain(ins));
+                AU.playNote(midi, safeWhen(t0 + k * part), Math.max(0.05, part * (rat > 1 ? 0.8 : (len > 1 ? 0.98 : 0.86))) + (rat === 1 ? extra : 0),
+                    Math.min(1.1, 0.9 * vol * hv * (k === 0 ? 1 : 0.85)), fx, ins, insGain(ins), k === 0 && legato);
             }
             any = true;
         }
@@ -413,7 +444,7 @@ function resolveTick(t, g) {
     if (g.i >= S.length) g.i = 0;
     let len = S[g.i].r * state.div;
     while (t - g.start >= len) { g.start += len; g.i = (g.i + 1) % S.length; len = S[g.i].r * state.div; }
-    return { pi: S[g.i].p, n: t - g.start, si: g.i };
+    return { pi: S[g.i].p, n: t - g.start, si: g.i, left: len - (t - g.start) };
 }
 
 // Export : « joue » la mesure (ou la chanson entière) à blanc et note chaque coup, avec son instant en secondes depuis le début.
@@ -423,25 +454,25 @@ function recordEvents(o) {
     const rec = {
         now: () => -1,                                  // rien ne part « dans le passé » : les instants restent ceux du motif
         playDrum: (track, drum, when, vel, fx) => { events.push({ k: 'd', track, drum, when: Math.max(0, when), vel, fx }); },
-        playNote: (midi, when, dur, vel, fx, key, trim) => { events.push({ k: 'n', midi, when: Math.max(0, when), dur, vel, fx, key, trim }); }
+        playNote: (midi, when, dur, vel, fx, key, trim, legato) => { events.push({ k: 'n', midi, when: Math.max(0, when), dur, vel, fx, key, trim, legato: !!legato }); }
     };
     const song = state.songOn && state.song.length > 0;
     const bars = song ? state.song.reduce((t, e) => t + e.r, 0) : Math.max(1, o.bars | 0);
     const ticks = bars * state.div, d = stepDur();
-    const savedAU = AU, savedHum = humOn;
-    AU = rec; humOn = !!o.human;
+    const savedAU = AU, savedHum = humOn, savedCarry = wrapCarry;
+    AU = rec; humOn = !!o.human; wrapCarry = {};
     try {
         for (let t = 0; t < ticks; t++) {
             const lag = (state.div !== 12 && t % 2 === 1) ? (state.swing / 100) * 0.5 * d : 0;
             const rt = resolveTick(t, g);
-            triggerTick(rt.n, t * d + lag, d, rt.pi);
+            triggerTick(rt.n, t * d + lag, d, rt.pi, rt.left);
         }
-    } finally { AU = savedAU; humOn = savedHum; }
+    } finally { AU = savedAU; humOn = savedHum; wrapCarry = savedCarry; }
     return { events, bars, ticks, seconds: ticks * d, bpm: state.bpm, song };
 }
 
 // Joue tout ce qui tombe sur ce pas ; renvoie la position et les pistes déclenchées (pour l'affichage).
-function triggerTick(n, when, d, pi) {
+function triggerTick(n, when, d, pi, left) {
     const p = state.pats[pi], idx = [], fired = [];
     DRUMS.forEach((dr, ti) => {
         const pos = lanePos(dr.id, n, p);
@@ -455,7 +486,7 @@ function triggerTick(n, when, d, pi) {
     });
     const mp = lanePos(MEL, n, p), me = stepExt(MEL, mp.idx, p);
     idx[DRUMS.length] = mp.idx;
-    if (passes(me, mp.cycle) && playMelodyStep(mp.idx, effLen(MEL, p), me, when, d, p)) fired[DRUMS.length] = true;
+    if (passes(me, mp.cycle) && playMelodyStep(mp.idx, effLen(MEL, p), me, when, d, p, left)) fired[DRUMS.length] = true;
     return { idx, fired };
 }
 
@@ -467,10 +498,14 @@ function schedule() {
         const d = stepDur();
         const lag = (state.div !== 12 && tick % 2 === 1) ? (state.swing / 100) * 0.5 * d : 0;
         const when = nextTime + lag;
-        const rt = resolveTick(tick);
-        const r = triggerTick(rt.n, when, d, rt.pi);
-        queue.push({ tick, time: when, idx: r.idx, fired: r.fired, pi: rt.pi, si: rt.si });
-        if (queue.length > 96) queue.shift();
+        const g4 = state.div / 4;
+        if ((clickOn || tick < 0) && ((tick % g4) + g4) % g4 === 0) SeqAudio.click(nextTime, ((tick % state.div) + state.div) % state.div === 0);
+        if (tick >= 0) {                                       // (avant 0 : la mesure de compte, clic seul)
+            const rt = resolveTick(tick);
+            const r = triggerTick(rt.n, when, d, rt.pi, rt.left);
+            queue.push({ tick, time: when, idx: r.idx, fired: r.fired, pi: rt.pi, si: rt.si });
+            if (queue.length > 96) queue.shift();
+        }
         nextTime += d;
         tick++;
     }
@@ -492,8 +527,9 @@ function draw() {
 function start() {
     if (!SeqAudio.init()) return;
     playing = true;
-    tick = 0;
+    tick = countIn ? -state.div : 0;
     sg.on = false;
+    wrapCarry = {};
     nextTime = SeqAudio.now() + 0.08;
     queue.length = 0;
     schedule();
@@ -868,6 +904,15 @@ function renderVolumes() {
     paintRange($('volDrums'));
     paintRange($('volMel'));
 }
+function renderTie() {
+    $('tieWrap').checked = state.tie;
+    $('tieWrap').disabled = state.same === 'repeat';
+    $('sameMode').querySelectorAll('button').forEach(b => {
+        const on = b.dataset.v === state.same;
+        b.classList.toggle('on', on);
+        b.setAttribute('aria-pressed', on ? 'true' : 'false');
+    });
+}
 function renderHum() {
     $('humT').value = state.hum.t;
     $('humV').value = state.hum.v;
@@ -897,6 +942,7 @@ function renderAll() {
     renderPreset();
     renderVolumes();
     renderHum();
+    renderTie();
     renderMelodyControls();
     renderPatterns();
 }
@@ -1306,6 +1352,58 @@ function setExt(k, val) {
     renderInsp();
     save();
 }
+// Faire tourner les pas de la piste d'un cran dans sa boucle (les réglages de pas suivent)
+function rotateLane(dir) {
+    if (!sel) return;
+    const id = sel.lane, L = effLen(id);
+    if (L < 2) return;
+    const rot = a => { const c = a.slice(0, L); for (let i = 0; i < L; i++) a[(i + dir + L) % L] = c[i]; };
+    if (id === MEL) state.mel.forEach(grid => grid.forEach(rot)); else rot(state.pat[id]);
+    const bag = state.ext[id], nb = {};
+    Object.keys(bag).forEach(k => { const i = +k; nb[i < L ? (i + dir + L) % L : i] = bag[k]; });
+    state.ext[id] = nb;
+    if (id === MEL) refreshMelSteps(); else { state.preset = ''; renderPreset(); refreshDrumSteps(); }
+    decorate();
+    renderInsp();
+    save();
+}
+function clearLane() {
+    if (!sel) return;
+    const id = sel.lane;
+    if (id === MEL) { clearMelody(); return; }
+    state.pat[id] = Array(MAXSTEPS).fill(0);
+    state.ext[id] = {};
+    state.preset = '';
+    renderPreset();
+    refreshDrumSteps();
+    decorate();
+    renderInsp();
+    save();
+}
+// Un petit message passager (même pastille que l'état du chargement des sons)
+let toastT = 0;
+function toast(text) {
+    const chip = $('audioStatus');
+    chip.textContent = text;
+    chip.hidden = false;
+    clearTimeout(toastT);
+    toastT = setTimeout(() => { chip.hidden = true; chip.textContent = ''; }, 2600);
+}
+// Monter ou descendre toute la mélodie d'un degré de la gamme (une ligne de la grille), couches comprises
+function shiftMelody(dir) {
+    const R = rowsInfo.length;
+    const blocked = state.mel.some(grid => grid[dir > 0 ? R - 1 : 0].some(Boolean));
+    if (blocked) { toast(dir > 0 ? 'Une note est déjà tout en haut de la grille.' : 'Une note est déjà tout en bas de la grille.'); return; }
+    state.mel = state.mel.map(grid => {
+        const g = grid.map(row => row.slice());
+        for (let r = 0; r < R; r++) g[r] = Array(MAXSTEPS).fill(0);
+        for (let r = 0; r < R; r++) if (r + dir >= 0 && r + dir < R) g[r + dir] = grid[r].slice();
+        return g;
+    });
+    buildMelody();
+    renderInsp();
+    save();
+}
 const fmtOff = v => v === 0 ? '0 %' : (v > 0 ? '+' : '−') + Math.abs(v) + ' %';
 // Force du coup (pas de batterie choisi dans le panneau) : 3 fantôme, 1 normal, 2 accent ; allume le pas s'il était éteint
 function setLevel(v) {
@@ -1348,6 +1446,24 @@ insp.addEventListener('input', e => {
 });
 $('iLen').addEventListener('change', () => setLen($('iLen').value));
 $('iOff').addEventListener('input', () => setOff($('iOff').value));
+$('iRotL').addEventListener('click', () => rotateLane(-1));
+$('iRotR').addEventListener('click', () => rotateLane(1));
+$('iClearLane').addEventListener('click', clearLane);
+$('melUp').addEventListener('click', () => shiftMelody(1));
+$('melDown').addEventListener('click', () => shiftMelody(-1));
+$('tieWrap').addEventListener('change', () => { state.tie = $('tieWrap').checked; save(); });
+$('sameMode').addEventListener('click', e => {
+    const b = e.target.closest('button');
+    if (!b || b.dataset.v === state.same) return;
+    state.same = b.dataset.v;
+    renderTie();
+    save();
+});
+$('clickOn').checked = clickOn;
+$('countIn').checked = countIn;
+function saveClick() { try { localStorage.setItem(CLICK_KEY, JSON.stringify({ on: clickOn, count: countIn })); } catch (e) { /* ignoré */ } }
+$('clickOn').addEventListener('change', () => { clickOn = $('clickOn').checked; saveClick(); });
+$('countIn').addEventListener('change', () => { countIn = $('countIn').checked; saveClick(); });
 insp.addEventListener('click', e => {
     const b = e.target.closest('button');
     if (!b || !sel) return;

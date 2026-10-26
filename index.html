@@ -116,6 +116,24 @@
                 </div>
 
                 <div class="block">
+                    <span class="lbl">Même note, même instrument</span>
+                    <div id="sameMode" class="seg" role="group" aria-label="Cases voisines du même instrument sur un même degré">
+                        <button type="button" data-v="hold" class="on" aria-pressed="true" title="Les cases voisines ne font qu'une seule note tenue">Note tenue</button>
+                        <button type="button" data-v="repeat" aria-pressed="false" title="Chaque case rejoue la note">Répétition</button>
+                    </div>
+                    <p class="hint">Quand un même degré est posé sur plusieurs cases de suite avec le même instrument : une seule note qui dure, ou la note rejouée à chaque case. (Lecture avant ou arrière ; les autres sens répètent toujours.)</p>
+                    <label class="chk"><input id="tieWrap" type="checkbox" checked> Relier la fin et le début de la boucle</label>
+                    <p class="hint">Pour les notes tenues : une note qui va jusqu'à la fin de la boucle et qui recommence au début reste un seul son continu, au lieu d'être rejouée.</p>
+                </div>
+
+                <div class="block">
+                    <span class="lbl">Métronome</span>
+                    <label class="chk"><input id="clickOn" type="checkbox"> Clic pendant la lecture</label>
+                    <label class="chk"><input id="countIn" type="checkbox"> Compte d'une mesure avant de jouer</label>
+                    <p class="hint">Pour jouer ou enregistrer par-dessus. Le clic n'est pas dans les exports.</p>
+                </div>
+
+                <div class="block">
                     <span class="lbl">Volumes</span>
                     <div class="vrow">
                         <span>Batterie</span>
@@ -204,6 +222,8 @@
                     </div>
                     <div class="bar-tools">
                         <button type="button" id="melLane" class="btn-sm lane-btn" title="Longueur et sens de la boucle de la mélodie">Boucle 16 →</button>
+                        <button type="button" id="melDown" class="btn-sm" title="Descendre toute la mélodie d'un degré de la gamme" aria-label="Descendre toute la mélodie d'un degré">↓ Degré</button>
+                        <button type="button" id="melUp" class="btn-sm" title="Monter toute la mélodie d'un degré de la gamme" aria-label="Monter toute la mélodie d'un degré">↑ Degré</button>
                         <button type="button" id="editMel" class="btn-sm btn-toggle" aria-pressed="false" title="Touchez un pas pour régler sa probabilité, sa condition, ses répétitions et ses verrous">Régler les pas</button>
                         <button type="button" id="melGen" class="btn-sm btn-gen">Générer</button>
                         <button type="button" id="melRand" class="btn-sm" title="Phrase tirée au hasard, sans tenir compte du style">Au hasard</button>
@@ -394,6 +414,15 @@
             <div class="row-between"><span class="lbl">Décalage</span><span id="iOffOut" class="badge blue">0 %</span></div>
             <input id="iOff" class="rng" type="range" min="-40" max="40" step="1" value="0" aria-label="Décalage de la piste">
             <p class="hint">Pousse toute la piste en avance (−) ou en retard (+), en % d'un pas. Une caisse claire un peu en retard donne un jeu « laid back ».</p>
+        </div>
+        <div class="fx">
+            <div class="row-between"><span class="lbl">Pas de la piste</span></div>
+            <div class="song-tools">
+                <button type="button" id="iRotL" class="btn-sm" title="Faire tourner les pas d'un cran vers la gauche">◀ Décaler</button>
+                <button type="button" id="iRotR" class="btn-sm" title="Faire tourner les pas d'un cran vers la droite">Décaler ▶</button>
+                <button type="button" id="iClearLane" class="btn-sm">Vider la piste</button>
+            </div>
+            <p class="hint">« Décaler » fait tourner les pas dans la boucle de la piste ; leurs réglages les suivent.</p>
         </div>
         <button type="button" id="iResetLane" class="btn-sm">Remettre à zéro</button>
     </div>

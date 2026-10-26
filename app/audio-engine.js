@@ -456,12 +456,59 @@ const SeqAudio = (() => {
         return best;
     }
 
+    // Boucle de maintien d'un échantillon « tenu » (flûte, orgue, cordes, chœur…) : une note plus longue que l'enregistrement
+    // (3 à 4 s) continue en bouclant sa partie stable, au lieu de s'éteindre. Le point d'arrivée est cherché là où la fin de la
+    // boucle ressemble le plus à son début, pour que le raccord ne s'entende pas. Un son qui décroît (pincé, frappé) n'a pas de boucle.
+    const loopCache = new WeakMap();
+    function loopOf(buf) {
+        if (!buf) return null;
+        if (loopCache.has(buf)) return loopCache.get(buf);
+        let lp = null;
+        try { lp = findLoop(buf); } catch (e) { lp = null; }
+        loopCache.set(buf, lp);
+        return lp;
+    }
+    function findLoop(buf) {
+        const x = buf.getChannelData(0), sr = buf.sampleRate, n = x.length;
+        const win = Math.round(0.05 * sr), nw = Math.floor(n / win);
+        if (nw < 16) return null;
+        const rms = [];
+        for (let w = 0; w < nw; w++) { let s = 0; for (let i = w * win, e = i + win; i < e; i++) s += x[i] * x[i]; rms.push(Math.sqrt(s / win)); }
+        const mid = rms.slice(Math.floor(nw * 0.25), Math.floor(nw * 0.65)).sort((a, b) => a - b);
+        const ref = mid[mid.length >> 1];
+        if (!(ref > 1e-4)) return null;
+        let a = 0; while (a < nw && rms[a] < 0.8 * ref) a++;
+        let z = nw - 3; while (z > a && rms[z] < 0.8 * ref) z--;           // on laisse de côté les 150 dernières ms (relâchement)
+        const ls = (a + 2) * win, maxEnd = Math.min((z + 1) * win, n - 1);
+        if (maxEnd - ls < 0.5 * sr) return null;                           // pas de partie stable : son qui décroît
+        const le0 = Math.min(maxEnd, ls + Math.round(2 * sr));
+        const W = 768, lo = Math.max(ls + Math.round(0.4 * sr), le0 - Math.round(0.12 * sr));
+        let eA = 0; for (let i = 0; i < W; i++) eA += x[ls - W + i] * x[ls - W + i];
+        let best = le0, bs = -2;
+        for (let e = le0; e >= lo; e -= 2) {
+            let dot = 0, eB = 0;
+            for (let i = 0; i < W; i++) { const y = x[e - W + i]; dot += y * x[ls - W + i]; eB += y * y; }
+            const sc = dot / Math.sqrt(eA * eB + 1e-12);
+            if (sc > bs) { bs = sc; best = e; }
+        }
+        // fondu enchaîné : la fin de la boucle est mélangée peu à peu avec ce qui précède son début, si bien que le retour au début
+        // continue la courbe sans saut (pas de « clic » au raccord)
+        const xf = Math.min(Math.round(0.03 * sr), ls - 1, best - ls - 1);
+        for (let i = 0; i < xf; i++) {
+            const w = (i + 1) / (xf + 1), a = best - xf + i, b = ls - xf + i;
+            for (let ch = 0; ch < buf.numberOfChannels; ch++) { const d = buf.getChannelData(ch); d[a] = d[a] * (1 - w) + d[b] * w; }
+        }
+        return { s: ls / sr, e: best / sr };
+    }
+
     // fx : verrous du pas (voir fxInput), ou rien · key : instrument de la note (sinon l'instrument par défaut)
     // vel : force de la note (0,9 = normale) · trim : niveau de l'instrument dans le mélange (1 = d'origine)
-    function playNote(midi, when, dur, vel, fx, key, trim) {
+    // legato : la note enchaîne sur la précédente du même instrument (fin de boucle) : attaque courte, pour un raccord sans trou
+    function playNote(midi, when, dur, vel, fx, key, trim, legato) {
         if (!ctx) return;
         const k = TIMBRES[key] ? key : timbre;
-        const snd = soundOf(k), v = Lib.voice(k, snd.voice), o = snd.out, c = insChain(k);
+        const snd = soundOf(k), v = Lib.voice(k, snd.voice), c = insChain(k);
+        const o = legato ? Object.assign({}, snd.out, { att: Math.min(snd.out.att, 30) }) : snd.out;
         const out = fx ? fxInput(c.inp, fx) : c.inp;
         const tr = trim == null ? 1 : trim, tune = o.tune || 0, level = vel * tr;
         let played = false;
@@ -480,6 +527,8 @@ const SeqAudio = (() => {
                 const nk = nearestKey(b.keys, midi), src = ctx.createBufferSource(), g = ctx.createGain();
                 src.buffer = b.buf[nk];
                 src.playbackRate.value = Math.pow(2, (midi - nk) / 12);
+                const lp = v.hold ? null : loopOf(src.buffer);        // son tenu : on boucle sa partie stable si la note dépasse l'échantillon
+                if (lp) { src.loop = true; src.loopStart = lp.s; src.loopEnd = lp.e; }
                 if (tune) src.detune.value = tune;
                 vibrato(c, o, src);
                 const stop = sampleEnv(g, when, Math.max(dur, v.hold || 0.04), level, o);
@@ -513,6 +562,20 @@ const SeqAudio = (() => {
         prune();
     }
 
+    // Clic de métronome : un petit « tic » (plus aigu sur le premier temps), directement sur la sortie générale
+    function click(when, accent) {
+        if (!ctx) return;
+        const o = ctx.createOscillator(), g = ctx.createGain();
+        o.type = 'sine';
+        o.frequency.value = accent ? 1760 : 1175;
+        g.gain.setValueAtTime(0.0001, when);
+        g.gain.exponentialRampToValueAtTime(accent ? 0.5 : 0.32, when + 0.002);
+        g.gain.exponentialRampToValueAtTime(0.0001, when + 0.05);
+        o.connect(g); g.connect(master);
+        o.start(when); o.stop(when + 0.06);
+        nodes.push(o);
+    }
+
     /* ---------- Volumes, arrêt ---------- */
     function setTrackVolume(id, v) {
         vols.track[id] = v;
@@ -541,7 +604,7 @@ const SeqAudio = (() => {
         create: createEngine,
         // Promesse tenue quand tous les échantillons demandés sont chargés (ou ont échoué : le synthé de secours joue alors)
         whenLoaded() { return Promise.all(Array.from(wanted).map((k) => loadVoice(k))); },
-        TIMBRES, init, now, get, playDrum, playNote, setTimbre, want, setInstrumentAudible, setSound, setTrackVolume, setDrumVolume, setMelodyVolume, stopAll,
+        TIMBRES, init, now, get, playDrum, playNote, click, setTimbre, want, setInstrumentAudible, setSound, setTrackVolume, setDrumVolume, setMelodyVolume, stopAll,
         // Pour l'éditeur : ce qui charge encore (« idle » / « loading » / « ready » / « failed »), pour un instrument
         loadState(k) {
             const v = voiceOf(k);

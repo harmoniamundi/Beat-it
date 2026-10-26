@@ -139,6 +139,26 @@ Les conditions comptent les tours de la boucle de chaque piste, depuis le début
 - **Décalage d'une piste** : dans le réglage de boucle d'une piste (le petit bouton « 16→ »), curseur de −40 % à +40 % d'un pas ; vers le + la piste joue en retard (caisse claire
   « laid back »), vers le − en avance. Chaque piste de batterie, et la mélodie, a le sien.
 
+## Outils de piste, degré, métronome
+
+- **Pas de la piste** (dans le réglage de boucle d'une piste, le petit bouton « 16→ ») : *Décaler* ◀ ▶ fait tourner les pas d'un cran dans la boucle de la piste (les réglages de chaque pas
+  les suivent, pour la batterie comme pour la mélodie) ; *Vider la piste* l'efface.
+- **↑ Degré / ↓ Degré** (barre de la mélodie) : monte ou descend toute la mélodie, couches comprises, d'une ligne de la gamme. Si une note est déjà tout en haut (ou en bas) de la grille, rien ne bouge
+  et un message le dit. (Changer *Fondamentale* ou *Registre* transpose aussi, mais en gardant les mêmes degrés.)
+- **Métronome** (colonne de gauche) : *Clic pendant la lecture* (plus aigu sur le premier temps) et *Compte d'une mesure avant de jouer*. Ces deux réglages sont ceux de l'outil : gardés dans le navigateur,
+  ils ne font pas partie des projets ni de l'historique, et le clic n'est pas dans les exports.
+
+## Notes tenues et continuité de la boucle
+
+- **Même note, même instrument** (colonne de gauche) : quand un même degré est posé sur plusieurs cases voisines avec le même instrument, choisissez *Note tenue* (une seule note qui dure, par défaut)
+  ou *Répétition* (la note est rejouée à chaque case). Les sens de lecture autres qu'avant / arrière répètent toujours. Le choix est enregistré avec le projet et vaut pour les exports.
+- En mode *Note tenue*, des cases voisines d'un même instrument (en lecture avant ou arrière) forment une seule note tenue. **Relier la fin et le début de la boucle** (colonne de gauche, activé par défaut) : si une note
+  tenue va jusqu'à la dernière case et que la même note recommence à la première, elle est jouée d'une seule traite (la fin est prolongée sur le début, qui n'est pas rejoué) ; pas de trou ni de
+  nouvelle attaque au retour de la boucle. Si toute la boucle est tenue, chaque tour reprend la note avec un léger recouvrement et une attaque courte. En mode Chanson, la note ne se prolonge pas
+  d'une entrée à la suivante. Le réglage est enregistré avec le projet et vaut aussi pour les exports.
+- Les sons tenus à échantillons (flûte, orgue, cordes, clarinette, nappe…) **bouclent leur partie stable** : une note plus longue que l'enregistrement (3 à 4 s) continue sans s'éteindre. Les sons
+  qui décroissent naturellement (piano, guitare, cloches, marimba…) et la trompette (soundfont) ne bouclent pas.
+
 ## Patterns et chanson
 
 - **8 patterns (A à H)**, en haut de la page : chacun a sa propre batterie, sa mélodie, ses réglages de pas et de piste (boucles, sens, décalages). Le tempo, le swing, la subdivision,
